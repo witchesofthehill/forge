@@ -4,13 +4,16 @@ import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Multimap;
 import com.google.common.eventbus.Subscribe;
+import forge.game.GameView;
 import forge.game.card.CardView;
 import forge.game.event.*;
-import forge.game.player.Player;
 import forge.game.player.PlayerView;
+import forge.game.spellability.SpellAbilityStackInstance;
 import forge.game.zone.ZoneType;
+import forge.gamemodes.match.YieldController;
 import forge.gui.GuiBase;
 import forge.gui.interfaces.IGuiGame;
+import forge.localinstance.properties.ForgeConstants;
 import forge.localinstance.properties.ForgePreferences.FPref;
 import forge.model.FModel;
 import forge.player.PlayerControllerHuman;
@@ -128,12 +131,15 @@ public class FControlGameEventHandler extends IGameEventVisitor.Base<Void> {
             if (gameOver) {
                 gameOver = false;
                 if (humanController != null) {
-                    humanController.getInputQueue().onGameOver(true); // this will unlock any game threads waiting for inputs to complete
+                    humanController.macros().cancelCurrentMacro();
+                    // this will unlock any game threads waiting for inputs to complete
+                    humanController.getInputQueue().onGameOver(true);
                 }
             }
             if (gameFinished) {
                 gameFinished = false;
                 if (humanController != null) {
+                    humanController.macros().cancelCurrentMacro();
                     final PlayerView localPlayer = humanController.getLocalPlayerView();
                     humanController.cancelAwaitNextInput(); //ensure "Waiting for opponent..." doesn't appear behind WinLo
                     matchController.showPromptMessage(localPlayer, ""); //clear prompt behind WinLose overlay
@@ -178,9 +184,6 @@ public class FControlGameEventHandler extends IGameEventVisitor.Base<Void> {
         }
         return processEvent();
     }
-    private Void updateZone(final Player p, final ZoneType z) {
-        return updateZone(PlayerView.get(p), z);
-    }
     private Void updateZone(final PlayerView p, final ZoneType z) {
         if (p == null || z == null) { return null; }
 
@@ -196,9 +199,8 @@ public class FControlGameEventHandler extends IGameEventVisitor.Base<Void> {
         needSaveState = !"dev".equals(ev.phaseDesc());
 
         PlayerView ap = ev.playerTurn();
-        boolean refreshField = ap.getCards(ZoneType.Battlefield) != null &&
-                (ap.getCards(ZoneType.Battlefield).anyMatch(CardView::isToken)
-                || (FModel.getPreferences().getPrefBoolean(FPref.UI_STACK_CREATURES) && ap.getCards(ZoneType.Battlefield).anyMatch(c -> c.getCurrentState().isCreature())));
+        boolean refreshField = ap.getCards(ZoneType.Battlefield).anyMatch(CardView::isToken)
+                || (!"default".equals(FModel.getPreferences().getPref(FPref.UI_GROUP_PERMANENTS)) && ap.getCards(ZoneType.Battlefield).anyMatch(c -> c.getCurrentState().isCreature()));
         if (refreshField) {
             updateZone(ap, ZoneType.Battlefield);
         }
@@ -235,7 +237,10 @@ public class FControlGameEventHandler extends IGameEventVisitor.Base<Void> {
 
     @Override
     public Void visit(final GameEventPlayerControl ev) {
-        if (humanController != null) {
+        if (ev.newLobbyPlayerName() == null) {
+            // game end: must restore original
+            matchController.setGameController(ev.player(), null);
+        } else if (humanController != null) {
             final PlayerControllerHuman newController = ev.newControllerIsHuman() ? humanController : null;
             matchController.setGameController(ev.player(), newController);
         }
@@ -258,9 +263,13 @@ public class FControlGameEventHandler extends IGameEventVisitor.Base<Void> {
 
     @Override
     public Void visit(final GameEventSpellAbilityCast event) {
+        evaluateYieldInterruptForSpellCast(event);
+
         needStackUpdate = true;
-        if(GuiBase.getInterface().isLibgdxPort()) {
-            return processEvent(); //mobile port don't have notify stack addition like the desktop
+        if (matchController.isLibgdxPort() ||
+                ForgeConstants.STACK_EFFECT_NOTIFICATION_NEVER.equals(FModel.getPreferences().getPref(FPref.UI_STACK_EFFECT_NOTIFICATION_POLICY))) {
+            // mobile port don't have notify stack addition like the desktop
+            return processEvent();
         } else {
             processEvent();
 
@@ -268,6 +277,24 @@ public class FControlGameEventHandler extends IGameEventVisitor.Base<Void> {
             GuiBase.getInterface().invokeInEdtLater(notifyStackAddition);
         }
         return null;
+    }
+
+    private void evaluateYieldInterruptForSpellCast(GameEventSpellAbilityCast event) {
+        if (humanController == null) return;
+        YieldController yc = humanController.getYieldController();
+        // isYieldActive() only covers explicit yields; APINA-with-respects-interrupts
+        // also wants to be told about casts so it can set autoPassInterrupted.
+        if (!yc.shouldEvaluateInterrupts()) return;
+        GameView gv = matchController.getGameView();
+        if (gv == null || gv.getGame() == null) return;
+        // Look up the actual SpellAbilityStackInstance by id (host-side; client gv.getGame() is null).
+        int targetId = event.si().getId();
+        for (SpellAbilityStackInstance candidate : gv.getGame().getStack()) {
+            if (candidate.getId() == targetId) {
+                yc.onSpellAbilityCast(candidate);
+                return;
+            }
+        }
     }
 
     @Override
@@ -279,33 +306,13 @@ public class FControlGameEventHandler extends IGameEventVisitor.Base<Void> {
     @Override
     public Void visit(final GameEventSpellRemovedFromStack event) {
         needStackUpdate = true;
-        if(GuiBase.getInterface().isLibgdxPort()) {
-            return processEvent(); //mobile port don't have notify stack addition like the desktop
+        if (matchController.isLibgdxPort() ||
+                ForgeConstants.STACK_EFFECT_NOTIFICATION_NEVER.equals(FModel.getPreferences().getPref(FPref.UI_STACK_EFFECT_NOTIFICATION_POLICY))) {
         } else {
             processEvent();
 
             final Runnable notifyStackAddition = () -> matchController.notifyStackRemoval(event);
             GuiBase.getInterface().invokeInEdtLater(notifyStackAddition);
-        }
-        return null;
-    }
-
-    @Override
-    public Void visit(final GameEventSubgameEnd event) {
-        if (event.maingame() != null) {
-            for (Player p : event.maingame().getPlayers()) {
-                updateZone(p, ZoneType.Battlefield);
-                updateZone(p, ZoneType.Hand);
-                updateZone(p, ZoneType.Graveyard);
-                updateZone(p, ZoneType.Exile);
-                updateZone(p, ZoneType.Command);
-            }
-            //update matchscreen view to reflect maingame/previous daytime
-            if (event.maingame().isDay())
-                matchController.updateDayTime("Day");
-            else if (event.maingame().isNight())
-                matchController.updateDayTime("Night");
-            return processEvent();
         }
         return null;
     }
@@ -360,7 +367,6 @@ public class FControlGameEventHandler extends IGameEventVisitor.Base<Void> {
     @Override
     public Void visit(final GameEventBlockersDeclared event) {
         final Set<CardView> cards = new HashSet<>();
-
         for (final Multimap<CardView, CardView> kv : event.blockers().values()) {
             cards.addAll(kv.values());
         }
@@ -369,6 +375,14 @@ public class FControlGameEventHandler extends IGameEventVisitor.Base<Void> {
 
     @Override
     public Void visit(final GameEventAttackersDeclared event) {
+        if (humanController != null) {
+            YieldController yc = humanController.getYieldController();
+            // APINA-with-respects-interrupts wants the attackers signal too, not just explicit yields.
+            if (yc.shouldEvaluateInterrupts()) {
+                GameView gv = matchController.getGameView();
+                if (gv != null && gv.getCombat() != null) yc.onAttackersDeclared(gv.getCombat());
+            }
+        }
         return processCards(event.attackersMap().values(), cardsUpdate);
     }
 
@@ -389,13 +403,14 @@ public class FControlGameEventHandler extends IGameEventVisitor.Base<Void> {
 
     @Override
     public Void visit(final GameEventCombatUpdate event) {
-        if (!GuiBase.isNetworkplay(matchController))
+        if (!GuiBase.isNetPlay(matchController))
             return null; //not needed if single player only...
 
         final List<CardView> cards = new ArrayList<>();
         cards.addAll(event.attackers());
         cards.addAll(event.blockers());
 
+        needCombatUpdate = true;
         refreshFieldUpdate = true;
 
         processCards(cards, cardsRefreshDetails);
@@ -404,7 +419,7 @@ public class FControlGameEventHandler extends IGameEventVisitor.Base<Void> {
 
     @Override
     public Void visit(final GameEventCardChangeZone event) {
-        if (GuiBase.getInterface().isLibgdxPort()) {
+        if (matchController.isLibgdxPort()) {
             if (event.from() != null) {
                 updateZone(event.from().player(), event.from().zoneType());
             }
@@ -462,7 +477,7 @@ public class FControlGameEventHandler extends IGameEventVisitor.Base<Void> {
 
     @Override
     public Void visit(final GameEventShuffle event) {
-        if (GuiBase.getInterface().isLibgdxPort()) {
+        if (matchController.isLibgdxPort()) {
             return updateZone(event.player(), ZoneType.Library);
         } else {
             return processEvent();
