@@ -889,23 +889,29 @@ public final class CardType implements Comparable<CardType>, CardTypeView {
         return CoreType.allCoreTypeNames;
     }
 
-    private static List<String> sortedSubTypes;
+    // volatile + build-local-then-publish: lazily built and shared across concurrent
+    // game threads in one JVM (Endstep) via isASubType() (a forge-game caller through
+    // Cost). Eager static init can't be used because Constant.*_TYPES are populated
+    // later at card-DB load; this never publishes a half-built/unsorted list.
+    private static volatile List<String> sortedSubTypes;
     public static List<String> getSortedSubTypes() {
-        if (sortedSubTypes == null) {
-            sortedSubTypes = Lists.newArrayList();
-            sortedSubTypes.addAll(Constant.BASIC_TYPES);
-            sortedSubTypes.addAll(Constant.LAND_TYPES);
-            sortedSubTypes.addAll(Constant.CREATURE_TYPES);
-            sortedSubTypes.addAll(Constant.SPELL_TYPES);
-            sortedSubTypes.addAll(Constant.ENCHANTMENT_TYPES);
-            sortedSubTypes.addAll(Constant.ARTIFACT_TYPES);
-            sortedSubTypes.addAll(Constant.WALKER_TYPES);
-            sortedSubTypes.addAll(Constant.DUNGEON_TYPES);
-            sortedSubTypes.addAll(Constant.BATTLE_TYPES);
-            sortedSubTypes.addAll(Constant.PLANAR_TYPES);
-            Collections.sort(sortedSubTypes);
+        List<String> local = sortedSubTypes;
+        if (local == null) {
+            local = Lists.newArrayList();
+            local.addAll(Constant.BASIC_TYPES);
+            local.addAll(Constant.LAND_TYPES);
+            local.addAll(Constant.CREATURE_TYPES);
+            local.addAll(Constant.SPELL_TYPES);
+            local.addAll(Constant.ENCHANTMENT_TYPES);
+            local.addAll(Constant.ARTIFACT_TYPES);
+            local.addAll(Constant.WALKER_TYPES);
+            local.addAll(Constant.DUNGEON_TYPES);
+            local.addAll(Constant.BATTLE_TYPES);
+            local.addAll(Constant.PLANAR_TYPES);
+            Collections.sort(local);
+            sortedSubTypes = local;
         }
-        return sortedSubTypes;
+        return local;
     }
 
     public static Collection<String> getBasicTypes() {
