@@ -274,7 +274,11 @@ public class CardTranslation {
             translatedtypes = new HashMap<>();
             translatedoracles = new HashMap<>();
             oracleMappings = new HashMap<>();
-            translatedCaches = new HashMap<>();
+            // Thread-safe: translatedCaches is memoized DURING gameplay
+            // (translateSingleDescriptionText) and shared across concurrent games
+            // in one JVM (Endstep); the others are written once here at language
+            // load. Concurrent put on a plain HashMap can corrupt it.
+            translatedCaches = new java.util.concurrent.ConcurrentHashMap<>();
             readTranslationFile(languageSelected, languagesDirectory);
         }
     }

@@ -30,7 +30,10 @@ import java.util.*;
 import java.util.Map.Entry;
 
 public class Match {
-    private static List<PaperCard> removedCards = Lists.newArrayList();
+    // Thread-safe: this static list is shared across all concurrent games/matches
+    // in one JVM (Endstep) and is written during gameplay (RemoveFromMatchEffect)
+    // as well as deck prep. CopyOnWriteArrayList makes add + iteration race-free.
+    private static final List<PaperCard> removedCards = new java.util.concurrent.CopyOnWriteArrayList<>();
     private final List<RegisteredPlayer> players;
     private final GameRules rules;
     private final String title;
