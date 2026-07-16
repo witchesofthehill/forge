@@ -33,8 +33,9 @@ public class TokenDb implements ITokenDatabase {
     // concurrent games in one JVM (Endstep) and both maps are lazily populated DURING
     // gameplay (getToken -> loadTokenFromSet / fallback, on every token creation;
     // preloadTokens() is GUI-only so headless never preloads). Wrap so concurrent put
-    // can't corrupt the backing maps. Iteration of the views (getAllTokens/iterator)
-    // takes the same lock per Guava's synchronizedMultimap contract.
+    // can't corrupt the backing maps. EVERY iteration of an allTokenByName view
+    // (getToken, fallbackToken, getAllTokens, iterator) holds synchronized(allTokenByName)
+    // and the lazy load is double-checked under it, per Guava's synchronizedMultimap contract.
     private final Multimap<String, PaperToken> allTokenByName =
             com.google.common.collect.Multimaps.synchronizedMultimap(HashMultimap.create());
     private final Map<String, PaperToken> extraTokensByName =
@@ -94,8 +95,17 @@ public class TokenDb implements ITokenDatabase {
             return false;
         }
 
-        for (CardEdition.EditionEntry t : edition.getTokens().get(name)) {
-            allTokenByName.put(fullName, addTokenInSet(edition, name, t));
+        // Double-checked under the lock so concurrent games first-loading the same
+        // token don't both run the put loop (PaperToken has identity equality, so a
+        // racing pair would leave duplicate entries) and so this can't interleave
+        // with a view iteration (getToken/fallbackToken) on another thread.
+        synchronized (allTokenByName) {
+            if (allTokenByName.containsKey(fullName)) {
+                return true;
+            }
+            for (CardEdition.EditionEntry t : edition.getTokens().get(name)) {
+                allTokenByName.put(fullName, addTokenInSet(edition, name, t));
+            }
         }
         return true;
     }
@@ -122,7 +132,14 @@ public class TokenDb implements ITokenDatabase {
                 if (restrictedTokenEntries.contains(edition.getCode() + "/" + tokenName)) continue;
                 String fullName = String.format("%s_%s", tokenName, edition.getCode().toLowerCase());
                 if (loadTokenFromSet(edition, tokenName)) {
-                    return Aggregates.random(allTokenByName.get(fullName));
+                    // Snapshot under the lock: allTokenByName.get(..) is a live view of a
+                    // synchronizedMultimap and Aggregates.random iterates it (Guava requires
+                    // manual sync on view iteration).
+                    List<PaperToken> collection;
+                    synchronized (allTokenByName) {
+                        collection = new ArrayList<>(allTokenByName.get(fullName));
+                    }
+                    return Aggregates.random(collection);
                 }
             }
             return null;
@@ -149,7 +166,14 @@ public class TokenDb implements ITokenDatabase {
             pick = Aggregates.random(legal);
         }
         String fullName = String.format("%s_%s", tokenName, pick.getCode().toLowerCase());
-        return Aggregates.random(allTokenByName.get(fullName));
+        // Snapshot under the lock: allTokenByName.get(..) is a live view of a
+        // synchronizedMultimap and Aggregates.random iterates it (Guava requires
+        // manual sync on view iteration).
+        List<PaperToken> collection;
+        synchronized (allTokenByName) {
+            collection = new ArrayList<>(allTokenByName.get(fullName));
+        }
+        return Aggregates.random(collection);
     }
 
     protected PaperToken fallbackToken(String name, String hostEditionCode) {
@@ -178,7 +202,13 @@ public class TokenDb implements ITokenDatabase {
 
         // Token exists in edition, return token at artIndex or a random one.
         if (loadTokenFromSet(realEdition, tokenName)) {
-            Collection<PaperToken> collection = allTokenByName.get(fullName);
+            // Snapshot under the lock: allTokenByName.get(..) is a live view of a
+            // synchronizedMultimap and the reads below iterate it (Guava requires
+            // manual sync on view iteration).
+            List<PaperToken> collection;
+            synchronized (allTokenByName) {
+                collection = new ArrayList<>(allTokenByName.get(fullName));
+            }
 
             if (artIndex < 1 || artIndex > collection.size()) {
                 return Aggregates.random(collection);
