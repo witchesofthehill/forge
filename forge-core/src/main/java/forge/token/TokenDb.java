@@ -29,8 +29,16 @@ public class TokenDb implements ITokenDatabase {
 
     // The image names should be the same as the script name + _set
     // If that isn't found, consider falling back to the original token
-    private final Multimap<String, PaperToken> allTokenByName = HashMultimap.create();
-    private final Map<String, PaperToken> extraTokensByName = Maps.newTreeMap(String.CASE_INSENSITIVE_ORDER);
+    // Thread-safe: this single TokenDb (StaticData.allTokens) is shared across all
+    // concurrent games in one JVM (Endstep) and both maps are lazily populated DURING
+    // gameplay (getToken -> loadTokenFromSet / fallback, on every token creation;
+    // preloadTokens() is GUI-only so headless never preloads). Wrap so concurrent put
+    // can't corrupt the backing maps. Iteration of the views (getAllTokens/iterator)
+    // takes the same lock per Guava's synchronizedMultimap contract.
+    private final Multimap<String, PaperToken> allTokenByName =
+            com.google.common.collect.Multimaps.synchronizedMultimap(HashMultimap.create());
+    private final Map<String, PaperToken> extraTokensByName =
+            java.util.Collections.synchronizedMap(Maps.newTreeMap(String.CASE_INSENSITIVE_ORDER));
 
     private final CardEdition.Collection editions;
     private final Map<String, CardRules> rulesByName;
@@ -239,7 +247,9 @@ public class TokenDb implements ITokenDatabase {
 
     @Override
     public List<PaperToken> getAllTokens() {
-        return new ArrayList<>(allTokenByName.values());
+        synchronized (allTokenByName) {
+            return new ArrayList<>(allTokenByName.values());
+        }
     }
 
     @Override
@@ -259,7 +269,9 @@ public class TokenDb implements ITokenDatabase {
 
     @Override
     public Iterator<PaperToken> iterator() {
-        return allTokenByName.values().iterator();
+        synchronized (allTokenByName) {
+            return new ArrayList<>(allTokenByName.values()).iterator();
+        }
     }
 
     public Map<String, CardRules> getRules() { return this.rulesByName;}
