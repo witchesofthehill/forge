@@ -32,8 +32,8 @@ import forge.game.card.*;
 import forge.game.keyword.Keyword;
 import forge.game.phase.PhaseType;
 import forge.game.player.Player;
+import forge.game.staticability.StaticAbilityAdditionalActivations;
 import forge.game.staticability.StaticAbilityCastWithFlash;
-import forge.game.staticability.StaticAbilityExhaust;
 import forge.game.staticability.StaticAbilityNumLoyaltyAct;
 import forge.game.zone.CostPaymentStack;
 import forge.game.zone.Zone;
@@ -88,9 +88,6 @@ public class SpellAbilityRestriction extends SpellAbilityVariables {
             }
             if (value.equals("Hellbent")) {
                 this.setHellbent(true);
-            }
-            if (value.equals("Desert")) {
-                this.setDesert(true);
             }
             if (value.equals("Blessing")) {
                 this.setBlessing(true);
@@ -154,7 +151,7 @@ public class SpellAbilityRestriction extends SpellAbilityVariables {
                 this.setPresentCompare(params.get("PresentCompare"));
             }
             if (params.containsKey("PresentZone")) {
-                this.setPresentZone(ZoneType.smartValueOf(params.get("PresentZone")));
+                this.setPresentZones(ZoneType.listValueOf(params.get("PresentZone")));
             }
         }
 
@@ -412,11 +409,6 @@ public class SpellAbilityRestriction extends SpellAbilityVariables {
                 return false;
             }
         }
-        if (isDesert()) {
-            if (!activator.hasDesert()) {
-                return false;
-            }
-        }
         if (isBlessing()) {
             if (!activator.hasBlessing()) {
                 return false;
@@ -437,12 +429,12 @@ public class SpellAbilityRestriction extends SpellAbilityVariables {
                 return false;
             }
         }
-        if (this.getIsPresent() != null) {
+        if (getIsPresent() != null) {
             FCollection<GameObject> list;
             if (getPresentDefined() != null) {
                 list = AbilityUtils.getDefinedObjects(sa.getHostCard(), getPresentDefined(), sa);
             } else {
-                list = new FCollection<>(game.getCardsIn(getPresentZone()));
+                list = new FCollection<>(game.getCardsIn(getPresentZones()));
             }
 
             Predicate<GameObject> restriction = GameObjectPredicates.restriction(getIsPresent().split(","), activator, c, sa);
@@ -480,6 +472,14 @@ public class SpellAbilityRestriction extends SpellAbilityVariables {
                     return false;
                 }
             }
+        } else if (sa.isBoast()) {
+            if (sa.getActivationsThisTurn() >= StaticAbilityAdditionalActivations.getLimit(c, sa, activator)) {
+                return false;
+            }
+        } else if (sa.isExhaust() || sa.isPowerUp()) {
+            if (sa.getActivationsThisGame() >= StaticAbilityAdditionalActivations.getLimit(c, sa, activator)) {
+                return false;
+            }
         }
 
         // CR 702.37e / 702.168b
@@ -506,21 +506,6 @@ public class SpellAbilityRestriction extends SpellAbilityVariables {
             game.getTracker().unfreeze();
 
             if (!found) {
-                return false;
-            }
-        }
-
-        if (sa.isBoast()) {
-            int limit = activator.hasKeyword("Creatures you control can boast twice during each of your turns rather than once.") ? 2 : 1;
-            if (limit <= sa.getActivationsThisTurn()) {
-                return false;
-            }
-        } else if (sa.isExhaust()) {
-            if (sa.getActivationsThisGame() > 0 && !StaticAbilityExhaust.anyWithExhaust(activator)) {
-                return false;
-            }
-        } else if (sa.isPowerUp()) {
-            if (sa.getActivationsThisGame() > 0) {
                 return false;
             }
         }

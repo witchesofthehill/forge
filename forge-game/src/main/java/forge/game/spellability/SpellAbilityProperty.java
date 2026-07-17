@@ -97,6 +97,8 @@ public class SpellAbilityProperty {
             return sa.isEquip();
         } else if (property.equals("Boast")) {
             return sa.isBoast();
+        } else if (property.equals("Monstrosity")) {
+            return sa.isMonstrosity();
         } else if (property.equals("Exhaust")) {
             return sa.isExhaust();
         } else if (property.equals("Mayhem")) {
@@ -139,6 +141,16 @@ public class SpellAbilityProperty {
                 return false;
             }
             if (sa.getChapter() == sa.getHostCard().getCounters(CounterEnumType.LORE)) {
+                return false;
+            }
+        } else if (property.equals("EffectSourceAbility")) {
+            if (!source.isImmutable()) {
+                return false;
+            }
+            if (source.getEffectSourceAbility() == null) {
+                return false;
+            }
+            if (!sa.equals(source.getEffectSourceAbility().getRootAbility().getOriginalAbility())) {
                 return false;
             }
         } else if (property.equals("LastChapter")) {
