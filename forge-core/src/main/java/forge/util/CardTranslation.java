@@ -89,7 +89,7 @@ public class CardTranslation {
 
     private static String translateTokenName(String name) {
         if (translatedTokenNames == null)
-            translatedTokenNames = new HashMap<>();
+            translatedTokenNames = new java.util.concurrent.ConcurrentHashMap<>();
         String ttype = translatedTokenNames.get(name);
         if (ttype == null) {
             String sub = name.replace(" Token", "");
@@ -108,7 +108,7 @@ public class CardTranslation {
 
     private static String translateKnownEffectNames(String name) {
         if (translatedEffectNames == null)
-            translatedEffectNames = new HashMap<>();
+            translatedEffectNames = new java.util.concurrent.ConcurrentHashMap<>();
         String fname = translatedEffectNames.get(name);
         if (fname == null) {
             switch (name) {
@@ -142,7 +142,7 @@ public class CardTranslation {
 
     private static String translateEffectNames(String name) {
         if (translatedEffectNames == null)
-            translatedEffectNames = new HashMap<>();
+            translatedEffectNames = new java.util.concurrent.ConcurrentHashMap<>();
         String fname = translatedEffectNames.get(name);
         if (fname == null) {
             String finalname = name.replaceAll("\\([^()]*\\)", "");
@@ -273,8 +273,17 @@ public class CardTranslation {
             translatednames = new HashMap<>();
             translatedtypes = new HashMap<>();
             translatedoracles = new HashMap<>();
-            oracleMappings = new HashMap<>();
-            translatedCaches = new HashMap<>();
+            // Thread-safe: oracleMappings, translatedCaches, translatedEffectNames and
+            // translatedTokenNames are all memoized DURING gameplay (buildOracleMapping /
+            // translateSingleDescriptionText / translateEffectNames / translateTokenName)
+            // and shared across concurrent games in one JVM (Endstep); translatednames/
+            // types/oracles above are written once here at language load. A plain HashMap
+            // can corrupt under concurrent put. Allocating the lazy ones here too closes
+            // their check-then-act init race.
+            oracleMappings = new java.util.concurrent.ConcurrentHashMap<>();
+            translatedCaches = new java.util.concurrent.ConcurrentHashMap<>();
+            translatedEffectNames = new java.util.concurrent.ConcurrentHashMap<>();
+            translatedTokenNames = new java.util.concurrent.ConcurrentHashMap<>();
             readTranslationFile(languageSelected, languagesDirectory);
         }
     }
