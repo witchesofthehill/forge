@@ -101,11 +101,6 @@
       {
         "type": "card",
         "count": 1,
-        "cardName": "1996 World Champion"
-      },
-      {
-        "type": "card",
-        "count": 1,
         "cardName": "Ancestral Recall",
         "editions": [ "VMA" ]
       },
@@ -190,6 +185,12 @@
         "type": "item",
         "count": 1,
         "itemName": "Faerie Anklet"
+      },
+      {
+        "type": "card",
+        "count": 1,
+        "cardName": "Arzakon",
+        "editions": [ "MBC" ]
       },
       {
         "type": "gold",
@@ -4930,7 +4931,7 @@
     ],
     "ai": "",
     "speed": 45,
-    "scale": 1,
+    "scale": 3,
     "life": 40,
     "rewards": [
       {
@@ -35725,7 +35726,7 @@
     ],
     "ai": "",
     "speed": 60,
-    "scale": 1.5,
+    "scale": 1,
     "life": 30,
     "rewards": [
       {
@@ -55696,7 +55697,7 @@
         "addMaxCount": 5
       }
     ],
-    "colors": "BR",
+    "colors": "B",
     "spawnRate": 0
   },
   {
@@ -63377,10 +63378,10 @@
     "spawnRate": 0
   },
   {
-    "name": "Autumn Willow",
+    "name": "Kaysa",
     "sprite": "sprites/enemy/humanoid/elf/druid.atlas",
     "deck": [
-      "decks/legends/autumn_willow.dck"
+      "decks/legends/kaysa.dck"
     ],
     "ai": "",
     "speed": 45,

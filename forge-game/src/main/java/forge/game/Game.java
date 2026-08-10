@@ -74,6 +74,7 @@ public class Game {
     private final PlayerCollection allPlayers = new PlayerCollection();
     private final PlayerCollection ingamePlayers = new PlayerCollection();
     private final PlayerCollection lostPlayers = new PlayerCollection();
+    private GameEntityViewMap<Player, PlayerView> playerCache = new GameEntityViewMap<Player, PlayerView>();
 
     private List<Card> activePlanes = null;
 
@@ -260,7 +261,6 @@ public class Game {
         }
     }
 
-    private final GameEntityCache<Player, PlayerView> playerCache = new GameEntityCache<>();
     public Player getPlayer(PlayerView playerView) {
         return playerCache.get(playerView);
     }
@@ -272,10 +272,6 @@ public class Game {
             }
         }
         return null;
-    }
-
-    public void addPlayer(int id, Player player) {
-        playerCache.put(id, player);
     }
 
     // methods that deal with saving, retrieving and clearing LKI information about cards on zone change
@@ -347,7 +343,7 @@ public class Game {
             Player pl = factory.createIngamePlayer(this, id == null ? plId++ : id);
             allPlayers.add(pl);
             ingamePlayers.add(pl);
-
+            playerCache.put(pl);
             if (startingLife != -1) {
                 pl.setStartingLife(startingLife);
             } else {
@@ -765,9 +761,6 @@ public class Game {
             if (!visitor.visitAll(player.getZone(ZoneType.Battlefield).getCards(false))) {
                 return;
             }
-            if (!visitor.visitAll(((PlayerZoneBattlefield)player.getZone(ZoneType.Battlefield)).getMeldedCards())) {
-                return;
-            }
             if (!visitor.visitAll(player.getZone(ZoneType.Exile).getCards())) {
                 return;
             }
@@ -884,8 +877,6 @@ public class Game {
                 pl.revealFaceDownCards();
             }
         }
-
-        // TODO free any mindslaves
 
         for (Card c : cards) {
             // CR 800.4d if card is controlled by opponent, LTB should trigger
@@ -1009,7 +1000,13 @@ public class Game {
         ingamePlayers.remove(p);
         lostPlayers.add(p);
 
+        // free any mindslaves
+        for (Player pl : getPlayers()) {
+            pl.removeController(p);
+        }
+
         final Map<AbilityKey, Object> runParams = AbilityKey.mapFromPlayer(p);
+        runParams.put(AbilityKey.LastStateBattlefield, triggerList.getLastStateBattlefield());
         getTriggerHandler().runTrigger(TriggerType.LosesGame, runParams, false);
 
         getTriggerHandler().onPlayerLost(p);
@@ -1331,8 +1328,7 @@ public class Game {
         resetNumPiledGuessedSA();
         clearLeftBattlefieldThisTurn();
         clearLeftGraveyardThisTurn();
-        clearCounterAddedThisTurn();
-        clearCounterRemovedThisTurn();
+        clearCountersThisTurn();
         clearGlobalDamageHistory();
         // some cards need this info updated even after a player lost, so don't skip them
         for (Player player : getRegisteredPlayers()) {
@@ -1403,8 +1399,9 @@ public class Game {
         return result;
     }
 
-    public void clearCounterAddedThisTurn() {
+    public void clearCountersThisTurn() {
         countersAddedThisTurn.clear();
+        countersRemovedThisTurn.clear();
     }
 
     public void addCounterRemovedThisTurn(CounterType cType, Card card, Integer value) {
@@ -1422,10 +1419,6 @@ public class Game {
             }
         }
         return result;
-    }
-
-    public void clearCounterRemovedThisTurn() {
-        countersRemovedThisTurn.clear();
     }
 
     /**
