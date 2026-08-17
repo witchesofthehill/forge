@@ -7479,18 +7479,19 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
             }
         }
 
-        final Collection<SpellAbility> toRemove = Lists.newArrayListWithCapacity(abilities.size());
+        // removeAll on two ArrayLists is quadratic, and with removeUnplayable most entries go.
+        final List<SpellAbility> playable = Lists.newArrayListWithCapacity(abilities.size());
         for (final SpellAbility sa : abilities) {
             sa.setActivatingPlayer(player);
             // fix things like retrace
             // check only if SA can't be cast normally
             if (!sa.canPlay(true) && (removeUnplayable || !sa.isPossible())) {
-                toRemove.add(sa);
+                continue;
             }
+            playable.add(sa);
         }
-        abilities.removeAll(toRemove);
 
-        return abilities;
+        return playable;
     }
 
     public static Card fromPaperCard(IPaperCard pc, Player owner) {
