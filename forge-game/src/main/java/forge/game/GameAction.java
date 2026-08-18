@@ -1073,27 +1073,10 @@ public class GameAction {
     public final void checkStaticAbilities(final boolean runEvents) {
         checkStaticAbilities(runEvents, Sets.newHashSet(), CardCollection.EMPTY);
     }
-    public static final java.util.concurrent.atomic.AtomicLong STATIC_CALLS =
-            new java.util.concurrent.atomic.AtomicLong();
-    public static final java.util.concurrent.atomic.AtomicLong STATIC_NANOS =
-            new java.util.concurrent.atomic.AtomicLong();
-    public static final java.util.concurrent.atomic.AtomicLong STATIC_COUNT =
-            new java.util.concurrent.atomic.AtomicLong();
-
     public final void checkStaticAbilities(final boolean runEvents, final Set<Card> affectedCards, final CardCollectionView preList) {
         if (isCheckingStaticAbilitiesOnHold()) {
             return;
         }
-        STATIC_CALLS.incrementAndGet();
-        final long staticT0 = System.nanoTime();
-        try {
-            checkStaticAbilitiesTimed(runEvents, affectedCards, preList);
-        } finally {
-            STATIC_NANOS.addAndGet(System.nanoTime() - staticT0);
-        }
-    }
-
-    private void checkStaticAbilitiesTimed(final boolean runEvents, final Set<Card> affectedCards, final CardCollectionView preList) {
         if (game.isGameOver()) {
             return;
         }
@@ -1131,7 +1114,6 @@ public class GameAction {
             return true;
         }, true);
 
-        STATIC_COUNT.set(staticAbilities.size());
         staticAbilities.sort(effectOrder);
 
         final Map<StaticAbility, CardCollectionView> affectedPerAbility = Maps.newHashMap();
