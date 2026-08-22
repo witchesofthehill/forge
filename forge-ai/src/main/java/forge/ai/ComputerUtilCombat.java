@@ -2237,9 +2237,9 @@ public class ComputerUtilCombat {
     // cached per AI decision (AiCache is cleared in chooseSpellAbilityToPlay);
     // predictions ask this once per attacker otherwise
     private static Boolean isCombatDamagePreventedThisTurnCached(final Game game) {
-        return AiCache.getCached("isPreventCombatDamageThisTurn",
+        return AiCache.getCached("isPreventCombatDamageThisTurn", game,
                 () -> game.getReplacementHandler().isPreventCombatDamageThisTurn(),
-                List.of(AiCache::identity), game);
+                List.of());
     }
 
     public final static boolean dealsFirstStrikeDamage(final Card combatant, final boolean withoutAbilities, final Combat combat) {
