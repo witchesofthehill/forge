@@ -38,6 +38,9 @@ public final class CardArchetypeLDAGenerator {
 
     public static boolean initializeFormat(String format){
         List<Archetype> lda = CardThemedLDAIO.loadRawLDA(format);
+        if (lda == null) {
+            return false;
+        }
         Map<String,List<List<Pair<String, Double>>>> formatMap = CardThemedLDAIO.loadLDA(format);
         if(formatMap==null) {
             try {
