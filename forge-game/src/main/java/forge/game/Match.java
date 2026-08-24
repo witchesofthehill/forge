@@ -30,7 +30,7 @@ import java.util.*;
 import java.util.Map.Entry;
 
 public class Match {
-    private static List<PaperCard> removedCards = Lists.newArrayList();
+    private List<PaperCard> removedCards = Lists.newArrayList();
     private final List<RegisteredPlayer> players;
     private final GameRules rules;
     private final String title;
@@ -191,7 +191,7 @@ public class Match {
         return myRemovedAnteCards;
     }
 
-    public static List<PaperCard> getRemovedCards() { return removedCards; }
+    public List<PaperCard> getRemovedCards() { return removedCards; }
 
     public void removeCard(PaperCard c) {
         removedCards.add(c);
@@ -214,6 +214,9 @@ public class Match {
                 newLibrary.add(card);
             }
         }
+        // Sort by card name for deterministic pre-shuffle ordering (CardPool uses
+        // ConcurrentHashMap whose iteration order is not guaranteed).
+        newLibrary.sort(java.util.Comparator.comparing(Card::getName));
         library.setCards(newLibrary);
     }
 
@@ -404,7 +407,7 @@ public class Match {
             Deck losersDeck = players.get(i).getDeck();
             List<PaperCard> personalLosses = new ArrayList<>();
             for (Card c : gamePlayer.getCardsIn(ZoneType.Ante)) {
-                if(!c.isCollectible())
+                if (!c.isCollectible())
                     continue;
                 PaperCard toRemove = (PaperCard) c.getPaperCard();
                 // this could miss the cards by returning instances that are not equal to cards found in deck

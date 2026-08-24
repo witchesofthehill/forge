@@ -14,7 +14,6 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
 
-import forge.ai.AIOption;
 import forge.deck.*;
 import forge.deckchooser.FDeckChooser;
 import forge.game.GameType;
@@ -25,6 +24,7 @@ import forge.gamemodes.match.LobbySlotType;
 import forge.gamemodes.net.*;
 import forge.gamemodes.net.event.UpdateLobbyPlayerEvent;
 import forge.gui.CardDetailPanel;
+import forge.gui.FThreads;
 import forge.gui.SwingPrefBinders;
 import forge.gui.interfaces.IDraftEventHandler;
 import forge.gui.interfaces.ILobbyView;
@@ -339,6 +339,10 @@ public class VLobby implements ILobbyView {
 
     @Override
     public void update(final int slot, final LobbySlotType type) {
+        FThreads.invokeInEdtNowOrLater(() -> updateImpl(slot, type));
+    }
+
+    private void updateImpl(final int slot, final LobbySlotType type) {
         final FDeckChooser deckChooser = getDeckChooser(slot);
         deckChooser.setIsAi(type==LobbySlotType.AI);
         DeckType selectedDeckType = deckChooser.getSelectedDeckType();
@@ -362,18 +366,22 @@ public class VLobby implements ILobbyView {
         }
     }
 
+    // Lobby updates arrive on the Netty IO thread (network) and the EDT (local actions);
+    // VLobby mutates non-thread-safe Swing state, so funnel every update through the EDT.
     @Override
     public void update(final boolean fullUpdate) {
+        FThreads.invokeInEdtNowOrLater(() -> updateImpl(fullUpdate));
+    }
+
+    private void updateImpl(final boolean fullUpdate) {
         activePlayersNum = lobby.getNumberOfSlots();
         addPlayerBtn.setEnabled(activePlayersNum < MAX_PLAYERS);
 
         controller.syncModeFromHost();
         controller.onLobbyDataChanged();
 
-        final boolean allowNetworking = lobby.isAllowNetworking();
-
         ImmutableList<VariantCheckBox> vntBoxes;
-        if (allowNetworking) {
+        if (lobby.isAllowNetworking()) {
             vntBoxes = vntBoxesNetwork;
         } else {
             vntBoxes = vntBoxesLocal;
@@ -394,7 +402,7 @@ public class VLobby implements ILobbyView {
                     panel = playerPanels.get(i);
                     isNewPanel = !panel.isVisible();
                 } else {
-                    panel = new PlayerPanel(this, allowNetworking, i, slot, lobby.mayEdit(i), lobby.hasControl());
+                    panel = new PlayerPanel(this, i, slot, lobby.mayEdit(i), lobby.hasControl());
                     playerPanels.add(panel);
                     String constraints = "pushx, growx, wrap, hidemode 3";
                     if (i == 0) {
@@ -408,12 +416,15 @@ public class VLobby implements ILobbyView {
                 panel.setType(type);
                 panel.setPlayerName(slot.getName());
                 panel.setAvatarIndex(slot.getAvatarIndex());
-                panel.setSleeveIndex(slot.getSleeveIndex());
+                final Deck slotDeck = slot.getDeck();
+                panel.setSleeve(slot.getSleeveIndex(),
+                        slotDeck == null ? "" : slotDeck.getSleeveArtKey(),
+                        slotDeck == null ? Deck.DEFAULT_SLEEVE_OFFSET : slotDeck.getSleeveArtOffset());
                 panel.setTeam(slot.getTeam());
                 panel.setIsReady(slot.isReady());
                 panel.setIsDevMode(slot.isDevMode());
                 panel.setIsArchenemy(slot.isArchenemy());
-                panel.setUseAiSimulation(slot.getAiOptions().contains(AIOption.USE_SIMULATION));
+                panel.setUseAiSimulation(slot.getAiOptions());
                 panel.setMayEdit(lobby.mayEdit(i));
                 panel.setMayControl(lobby.mayControl(i));
                 panel.setMayRemove(lobby.mayRemove(i));
@@ -539,8 +550,16 @@ public class VLobby implements ILobbyView {
             playerChangeListener.update(index, getSlot(index));
         }
     }
+    // Re-broadcasts a deck whose card-art sleeve changed, so networked opponents pick up the new sleeve
+    void fireDeckSleeveChange(final int index, final Deck deck) {
+        if (playerChangeListener != null && deck != null) {
+            playerChangeListener.update(index, UpdateLobbyPlayerEvent.deckUpdate(deck));
+        }
+    }
+
     private void fireDeckChangeListener(final int index, final Deck deck) {
         decks[index] = deck;
+        getPlayerPanel(index).refreshSleeveFromDeck(deck);
         if (playerChangeListener != null) {
             playerChangeListener.update(index, UpdateLobbyPlayerEvent.deckUpdate(deck));
         }
@@ -1135,7 +1154,7 @@ public class VLobby implements ILobbyView {
             final GameType gameType = forCommander ? type : GameType.Constructed;
             final FDeckChooser fdc = new FDeckChooser(null, ai, gameType, forCommander);
             fdc.initialize(prefKey, deckType);
-            fdc.getLstDecks().setSelectCommand(() -> selectMainDeck(fdc, iSlot, forCommander));
+            fdc.setDeckSelectionCommand(() -> selectMainDeck(fdc, iSlot, forCommander));
             return fdc;
         });
     }

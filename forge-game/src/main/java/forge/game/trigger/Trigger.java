@@ -39,7 +39,7 @@ import forge.util.ITranslatable;
 import forge.util.Lang;
 import forge.util.TextUtil;
 
-import org.apache.commons.lang3.StringUtils;
+import org.apache.commons.lang3.Strings;
 
 import java.util.*;
 
@@ -52,16 +52,25 @@ import java.util.*;
  * @version $Id$
  */
 public abstract class Trigger extends TriggerReplacementBase {
-    private static int maxId = 0;
-    private static int nextId() { return ++maxId; }
+    // Thread-safe + monotonic: Endstep runs many games concurrently in one JVM,
+    // so this counter is shared across game threads. A non-atomic ++ races (lost
+    // updates), and resetIDs() rewinding it under a live game makes a freshly
+    // minted trigger reuse an id still in play — and Trigger.equals/hashCode
+    // below are purely id-based, so the duplicate de-registers the wrong trigger
+    // (silent trigger drop). Base 50000 preserves the original id range.
+    private static final java.util.concurrent.atomic.AtomicInteger maxId = new java.util.concurrent.atomic.AtomicInteger(50000);
+    private static int nextId() { return maxId.incrementAndGet(); }
 
     /**
      * <p>
      * resetIDs.
      * </p>
+     * Intentionally a no-op. Forge (single-game desktop) rewound this per game;
+     * with concurrent games sharing the counter, rewinding collides live ids.
+     * The counter stays monotonic instead — ids remain unique across all games.
      */
     public static void resetIDs() {
-        Trigger.maxId = 50000;
+        // no-op — see field comment
     }
 
     /** The ID. */
@@ -351,7 +360,7 @@ public abstract class Trigger extends TriggerReplacementBase {
     public boolean checkResolvedLimit(Player activator) {
         // CR 603.2i
         if (hasParam("ResolvedLimit")) {
-            if (Collections.frequency(getHostCard().getAbilityResolvedThisTurnActivators(getOverridingAbility()), activator)
+            if (getHostCard().getAbilityResolvedThisTurnActivators(getOverridingAbility()).count(activator)
                     >= Integer.parseInt(getParam("ResolvedLimit"))) {
                 return false;
             }
@@ -584,7 +593,6 @@ public abstract class Trigger extends TriggerReplacementBase {
         validPhases = phases;
     }
 
-    //public String getImportantStackObjects(SpellAbility sa) { return ""; };
     abstract public String getImportantStackObjects(SpellAbility sa);
 
     public SpellAbility getSpawningAbility() {
@@ -676,12 +684,24 @@ public abstract class Trigger extends TriggerReplacementBase {
     }
 
     public boolean looksBackInTime() {
-        return TriggerType.Exploited.equals(getMode()) ||
-                TriggerType.Destroyed.equals(getMode()) ||
-                TriggerType.Sacrificed.equals(getMode()) || TriggerType.SacrificedOnce.equals(getMode()) ||
-                ((TriggerType.ChangesZone.equals(getMode()) || TriggerType.ChangesZoneAll.equals(getMode()))
-                        && (StringUtils.contains(getParam("Origin"), "Battlefield") ||
-                        (StringUtils.contains(getParam("Origin"), "Graveyard") && !"Battlefield".equals(getParam("Destination"))) ||
-                        StringUtils.containsAny(getParam("Destination"), "Library", "Hand")));
+        // only contains the types that matter for performance
+        switch (getMode()) {
+            case Exploited:
+            case Destroyed:
+            case Sacrificed:
+            case SacrificedOnce:
+                return true;
+            case ChangesZone:
+            case ChangesZoneAll:
+                if (Strings.CS.contains(getParam("Origin"), "Battlefield")) {
+                    return true;
+                }
+                if (Strings.CS.contains(getParam("Origin"), "Graveyard") && !"Battlefield".equals(getParam("Destination"))) {
+                    return true;
+                }
+                return Strings.CS.containsAny(getParam("Destination"), "Library", "Hand");
+            default:
+                return false;
+        }
     }
 }

@@ -2,6 +2,8 @@ package forge.ai.ability;
 
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
+import com.google.common.collect.Multiset;
+
 import forge.ai.*;
 import forge.card.CardType;
 import forge.card.MagicColor;
@@ -43,8 +45,14 @@ public class ChangeZoneAi extends SpellAbilityAi {
      */
 
     // multipleCardsToChoose is used by Intuition and can be adapted to be used by other
-    // cards where multiple cards are fetched at once and they need to be coordinated
-    private static CardCollection multipleCardsToChoose = new CardCollection();
+    // cards where multiple cards are fetched at once and they need to be coordinated.
+    // ThreadLocal: shared static scratch state across concurrent AI games in one JVM
+    // (Endstep). Each game runs on its own thread, so this both eliminates the data
+    // race on the shared CardCollection and prevents one game's fetched Card objects
+    // from leaking into another game's choice. checkApiLogic() fills it; the later
+    // choose-from-list call on the same game thread consumes it.
+    private static final ThreadLocal<CardCollection> multipleCardsToChoose =
+            ThreadLocal.withInitial(CardCollection::new);
 
     protected boolean willPayCosts(Player payer, SpellAbility sa, Cost cost, Card source) {
         if (sa.isHidden()) {
@@ -134,7 +142,7 @@ public class ChangeZoneAi extends SpellAbilityAi {
 
     @Override
     protected AiAbilityDecision checkApiLogic(Player aiPlayer, SpellAbility sa) {
-        multipleCardsToChoose.clear();
+        multipleCardsToChoose.get().clear();
         String aiLogic = sa.getParam("AILogic");
         if (aiLogic != null) {
             if (aiLogic.equals("Always")) {
@@ -154,7 +162,7 @@ public class ChangeZoneAi extends SpellAbilityAi {
             } else if (aiLogic.equals("Intuition")) {
                 // This logic only fills the multiple cards array, the decision to play is made
                 // separately in hiddenOriginCanPlayAI later.
-                multipleCardsToChoose = SpecialCardAi.Intuition.considerMultiple(aiPlayer, sa);
+                multipleCardsToChoose.set(SpecialCardAi.Intuition.considerMultiple(aiPlayer, sa));
             } else if (aiLogic.equals("MazesEnd")) {
                 return SpecialCardAi.MazesEnd.consider(aiPlayer, sa);
             } else if (aiLogic.equals("Pongify")) {
@@ -477,7 +485,7 @@ public class ChangeZoneAi extends SpellAbilityAi {
 
         Iterable<Player> pDefined;
         final TargetRestrictions tgt = sa.getTargetRestrictions();
-        if ((tgt != null) && tgt.canTgtPlayer()) {
+        if (tgt != null && tgt.canTgtPlayer()) {
             final Player opp = AiAttackController.choosePreferredDefenderPlayer(ai);
             if (sa.isCurse()) {
                 if (sa.canTarget(opp)) {
@@ -603,6 +611,18 @@ public class ChangeZoneAi extends SpellAbilityAi {
                    return c;
             }
             return null;
+        }
+
+        if (ai.getTurn() <= 3) {
+            int manaSources = ComputerUtilMana.getAvailableManaEstimate(ai, false);
+            if (CardLists.count(ai.getCardsIn(ZoneType.Hand), CardPredicates.LANDS_PRODUCING_MANA) > 0) {
+                manaSources++;
+            }
+            final int nearTermMana = manaSources + 1;
+            CardCollection nearTerm = CardLists.filter(list, c -> c.getCMC() <= nearTermMana);
+            if (!nearTerm.isEmpty()) {
+                return ComputerUtilCard.getBestCreatureAI(nearTerm);
+            }
         }
 
         // not urgent, get the largest creature possible
@@ -1280,13 +1300,11 @@ public class ChangeZoneAi extends SpellAbilityAi {
                         }
                     }
                 }
-                Map<CounterType, Integer> counters = c.getCounters();
-                for (CounterType ct : counters.keySet()) {
-                    int amount = counters.get(ct);
-                    if (ComputerUtil.isNegativeCounter(ct, c)) {
-                        numNegativeCounters += amount;
+                for (Multiset.Entry<CounterType> e : c.getCounters().entrySet()) {
+                    if (ComputerUtil.isNegativeCounter(e.getElement(), c)) {
+                        numNegativeCounters += e.getCount();
                     }
-                    numTotalCounters += amount;
+                    numTotalCounters += e.getCount();
                 }
                 if (hasValuableAttachments || (ComputerUtilCard.isUselessCreature(ai, c) && !hasOppAttachments)) {
                     continue;
@@ -1457,7 +1475,7 @@ public class ChangeZoneAi extends SpellAbilityAi {
         // Focus on the keycards I don't already have access to
         if (destination.equals(ZoneType.Battlefield) || destination.equals(ZoneType.Hand) ||
                 (destination.equals(ZoneType.Library) && "0".equals(position))) {
-            for (Card c : player.getCardsIn(Lists.newArrayList(ZoneType.Hand, ZoneType.Battlefield))) {
+            for (Card c : player.getCardsIn(ZoneType.Hand, ZoneType.Battlefield)) {
                 keyCards.remove(c.getName());
             }
         }
@@ -1494,9 +1512,10 @@ public class ChangeZoneAi extends SpellAbilityAi {
             } else if ("MazesEnd".equals(logic)) {
                 return SpecialCardAi.MazesEnd.considerCardToGet(decider, sa);
             } else if ("Intuition".equals(logic)) {
-                if (!multipleCardsToChoose.isEmpty()) {
-                    Card choice = multipleCardsToChoose.get(0);
-                    multipleCardsToChoose.remove(0);
+                CardCollection chosen = multipleCardsToChoose.get();
+                if (!chosen.isEmpty()) {
+                    Card choice = chosen.get(0);
+                    chosen.remove(0);
                     return choice;
                 }
             } else if (logic.startsWith("ExilePreference")) {

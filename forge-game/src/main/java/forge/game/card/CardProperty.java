@@ -657,7 +657,7 @@ public class CardProperty {
                             return false;
                         break;
                     case "LastCastThisTurn":
-                        final List<Card> c = game.getStack().getSpellsCastThisTurn();
+                        final List<Card> c = game.getStack().getSpellCardsCastThisTurn();
                         if (c.isEmpty() || !card.sharesColorWith(c.get(c.size() - 1))) {
                             return false;
                         }
@@ -1472,8 +1472,7 @@ public class CardProperty {
             if (!card.hasCounters()) {
                 return false;
             }
-        }
-        else if (property.startsWith("counters")) {
+        } else if (property.startsWith("counters")) {
             // syntax example: counters_GE9_P1P1 or counters_LT12_TIME
             final String[] splitProperty = property.split("_");
             final String strNum = splitProperty[1].substring(2);
@@ -1483,7 +1482,7 @@ public class CardProperty {
 
             final int actualNumber;
             if (splitProperty[0].endsWith("ReceivedThisTurn")) {
-                actualNumber = game.getCounterAddedThisTurn(cType, splitProperty[3], "Card.StrictlySelf", source, sourceController, spellAbility);
+                actualNumber = game.getCounterAddedThisTurn(cType, splitProperty[3], "Card.StrictlySelf", card, controller, spellAbility);
             } else {
                 actualNumber = card.getCounters(cType);
             }
@@ -1846,6 +1845,10 @@ public class CardProperty {
             }
         } else if (property.equals("IsSuspected")) {
             if (!card.isSuspected()) {
+                return false;
+            }
+        } else if (property.equals("IsPrepared")) {
+            if (!card.isPrepared()) {
                 return false;
             }
         } else if (property.equals("IsRemembered")) {

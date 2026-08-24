@@ -74,8 +74,11 @@ import forge.game.zone.ZoneType;
  * @version $Id$
  */
 public abstract class SpellAbility extends CardTraitBase implements ISpellAbility, IIdentifiable, Comparable<SpellAbility> {
-    private static int maxId = 0;
-    private static int nextId() { return ++maxId; }
+    // Thread-safe: shared across concurrent game threads in one JVM (Endstep).
+    private static final java.util.concurrent.atomic.AtomicInteger maxId = new java.util.concurrent.atomic.AtomicInteger(0);
+    private static int nextId() { return maxId.incrementAndGet(); }
+    /** Reset the global ID counter. Called between parity games for isolation. */
+    public static void resetIdCounter() { maxId.set(0); }
 
     public static class EmptySa extends SpellAbility {
         public EmptySa(Card sourceCard) { super(sourceCard, Cost.Zero); setActivatingPlayer(sourceCard.getController());}
@@ -456,6 +459,13 @@ public abstract class SpellAbility extends CardTraitBase implements ISpellAbilit
                 return true;
             }
         }
+        if (isActivatedAbility() && hasParam("AlternateCost")) {
+            for (SpellAbility alt : GameActionUtil.getAdditionalCostSpell(this)) {
+                if (alt != this && alt.canPlay()) {
+                    return true;
+                }
+            }
+        }
         return false;
     }
 
@@ -592,6 +602,9 @@ public abstract class SpellAbility extends CardTraitBase implements ISpellAbilit
 
     public boolean isBoast() {
         return this.hasParam("Boast");
+    }
+    public boolean isMonstrosity() {
+        return this.hasParam("Monstrosity");
     }
     public boolean isExhaust() {
         return this.hasParam("Exhaust");
@@ -1238,7 +1251,7 @@ public abstract class SpellAbility extends CardTraitBase implements ISpellAbilit
                 clone.replacingObjects = AbilityKey.newMap();
             }
 
-            clone.setPayCosts(getPayCosts().copy());
+            clone.setPayCosts(getPayCosts() == Cost.Zero ? Cost.Zero : getPayCosts().copy());
             if (manaPart != null) {
                 clone.manaPart = new AbilityManaPart(clone, mapParams);
             }
@@ -2591,7 +2604,7 @@ public abstract class SpellAbility extends CardTraitBase implements ISpellAbilit
         if (getRestrictions().isInstantSpeed()) {
             return true;
         }
-        if ((isSpell() || this.isLandAbility()) && (isCastFromPlayEffect() || host.isInstant() || host.hasKeyword(Keyword.FLASH))) {
+        if ((isSpell() || isLandAbility()) && (isCastFromPlayEffect() || host.isInstant() || host.hasKeyword(Keyword.FLASH))) {
             return true;
         }
 

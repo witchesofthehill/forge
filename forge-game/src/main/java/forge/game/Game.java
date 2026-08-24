@@ -64,8 +64,9 @@ public class Game {
 
     private static final TaggedLogger netLog = Logger.tag("NETWORK");
 
-    private static int maxId = 0;
-    private static int nextId() { return ++maxId; }
+    // Thread-safe: shared across concurrent game threads in one JVM (Endstep).
+    private static final java.util.concurrent.atomic.AtomicInteger maxId = new java.util.concurrent.atomic.AtomicInteger(0);
+    private static int nextId() { return maxId.incrementAndGet(); }
 
     /** The ID. */
     private int id;
@@ -73,6 +74,7 @@ public class Game {
     private final PlayerCollection allPlayers = new PlayerCollection();
     private final PlayerCollection ingamePlayers = new PlayerCollection();
     private final PlayerCollection lostPlayers = new PlayerCollection();
+    private GameEntityViewMap<Player, PlayerView> playerCache = new GameEntityViewMap<Player, PlayerView>();
 
     private List<Card> activePlanes = null;
 
@@ -259,7 +261,6 @@ public class Game {
         }
     }
 
-    private final GameEntityCache<Player, PlayerView> playerCache = new GameEntityCache<>();
     public Player getPlayer(PlayerView playerView) {
         return playerCache.get(playerView);
     }
@@ -271,10 +272,6 @@ public class Game {
             }
         }
         return null;
-    }
-
-    public void addPlayer(int id, Player player) {
-        playerCache.put(id, player);
     }
 
     // methods that deal with saving, retrieving and clearing LKI information about cards on zone change
@@ -346,7 +343,7 @@ public class Game {
             Player pl = factory.createIngamePlayer(this, id == null ? plId++ : id);
             allPlayers.add(pl);
             ingamePlayers.add(pl);
-
+            playerCache.put(pl);
             if (startingLife != -1) {
                 pl.setStartingLife(startingLife);
             } else {
@@ -548,6 +545,16 @@ public class Game {
 
     public void dangerouslySetTimestamp(long timestamp) {
         this.timestamp = timestamp;
+    }
+
+    /**
+     * Snapshot support: aligns this game's fresh-card-id counters with the
+     * source game's, so a copy that preserves original card ids can never
+     * collide with ids handed out for cards created after the copy.
+     */
+    public void dangerouslySyncCardIdCounters(Game from) {
+        this.cardIdCounter = from.cardIdCounter;
+        this.hiddenCardIdCounter = from.hiddenCardIdCounter;
     }
 
     public final GameOutcome getOutcome() {
@@ -754,9 +761,6 @@ public class Game {
             if (!visitor.visitAll(player.getZone(ZoneType.Battlefield).getCards(false))) {
                 return;
             }
-            if (!visitor.visitAll(((PlayerZoneBattlefield)player.getZone(ZoneType.Battlefield)).getMeldedCards())) {
-                return;
-            }
             if (!visitor.visitAll(player.getZone(ZoneType.Exile).getCards())) {
                 return;
             }
@@ -873,8 +877,6 @@ public class Game {
                 pl.revealFaceDownCards();
             }
         }
-
-        // TODO free any mindslaves
 
         for (Card c : cards) {
             // CR 800.4d if card is controlled by opponent, LTB should trigger
@@ -998,7 +1000,13 @@ public class Game {
         ingamePlayers.remove(p);
         lostPlayers.add(p);
 
+        // free any mindslaves
+        for (Player pl : getPlayers()) {
+            pl.removeController(p);
+        }
+
         final Map<AbilityKey, Object> runParams = AbilityKey.mapFromPlayer(p);
+        runParams.put(AbilityKey.LastStateBattlefield, triggerList.getLastStateBattlefield());
         getTriggerHandler().runTrigger(TriggerType.LosesGame, runParams, false);
 
         getTriggerHandler().onPlayerLost(p);
@@ -1034,7 +1042,119 @@ public class Game {
     }
 
     private int cardIdCounter = 0, hiddenCardIdCounter = 0;
+
+    // ------------------------------------------------------------------
+    // Endstep patch 24 — runaway-game soft cap (documented divergence;
+    // precedent: patch 21's priority-loop cap). Desktop Forge hosts ONE
+    // game per JVM, so an infinite intra-resolution loop (token flood,
+    // mandatory-trigger cascade) merely hangs that user's machine. A
+    // headless multi-tenant host runs many games on one shared heap with
+    // -XX:+ExitOnOutOfMemoryError, so the same loop kills EVERY co-tenant
+    // game. Patch 21 bounds the PRIORITY loop only; these per-turn counters
+    // bound the intra-resolution loops that never return to priority (each
+    // created Card mints an id through nextCardId(); each waiting-trigger
+    // fire passes recordTriggerFired()). Past the cap the game is
+    // force-ended as a real GameEndReason.Draw via the engine's OWN
+    // setGameOver path — no invented outcome — then RunawayGameException
+    // unwinds the game thread. The Draw is recorded BEFORE the throw so
+    // even a broad catch that swallows the exception re-enters the guard
+    // on its next allocation and re-throws: strong termination pressure.
+    //
+    // Calibration (false-positive draw on a legitimate big turn is the key
+    // hazard): the default cap is 25,000 per turn — a huge real storm/token
+    // turn is low THOUSANDS of objects/trigger-fires, so the cap sits an
+    // order of magnitude above any legitimate game, yet 25k Cards is far
+    // below 3g-heap exhaustion. Tunable at boot without a rebuild
+    // (forge.runaway-cards-per-turn / forge.runaway-triggers-per-turn via
+    // the hosting service); set to Integer.MAX_VALUE (or <= 0) to disable.
+    //
+    // All counters are per-Game INSTANCE state (no new shared statics —
+    // the patch 16-20 hazard class); the two config caps are write-once
+    // boot values, volatile for safe publication.
+
+    /** Unwinds a game force-ended as a Draw by the runaway soft cap. */
+    public static class RunawayGameException extends RuntimeException {
+        private static final long serialVersionUID = 1L;
+        public RunawayGameException(final String message) {
+            super(message);
+        }
+    }
+
+    /** Default per-turn cap for both guarded quantities. See the
+     *  calibration note above. */
+    public static final int DEFAULT_RUNAWAY_CAP_PER_TURN = 25_000;
+
+    private static volatile int runawayCardsPerTurnCap = DEFAULT_RUNAWAY_CAP_PER_TURN;
+    private static volatile int runawayTriggersPerTurnCap = DEFAULT_RUNAWAY_CAP_PER_TURN;
+
+    public static void setRunawayCardsPerTurnCap(final int cap) {
+        runawayCardsPerTurnCap = cap > 0 ? cap : Integer.MAX_VALUE;
+    }
+    public static void setRunawayTriggersPerTurnCap(final int cap) {
+        runawayTriggersPerTurnCap = cap > 0 ? cap : Integer.MAX_VALUE;
+    }
+
+    private int runawayTurnStamp = -1;
+    private int cardsCreatedThisTurn = 0;
+    private int triggersFiredThisTurn = 0;
+    /** True once this game tripped a cap — subsequent over-cap calls throw
+     *  without re-running the (already-completed) game-over path. */
+    private boolean runawayTripped = false;
+    /** Suppresses the guard while setGameOver(Draw) is finalizing, so an
+     *  allocation made by game-over processing itself cannot throw from
+     *  inside setGameOver and abort the outcome recording. */
+    private boolean runawayFinalizing = false;
+
+    private void resetRunawayWindowOnTurnChange() {
+        final int turnNow = getPhaseHandler().getTurn();
+        if (turnNow != runawayTurnStamp) {
+            runawayTurnStamp = turnNow;
+            cardsCreatedThisTurn = 0;
+            triggersFiredThisTurn = 0;
+        }
+    }
+
+    private void checkRunawayCap(final int count, final int cap, final String what) {
+        if (count <= cap || runawayFinalizing) {
+            return;
+        }
+        if (!runawayTripped) {
+            runawayTripped = true;
+            Logger.tag("ENGINE").warn("Runaway-game soft cap hit: {} {} on turn {} (cap {});"
+                    + " forcing a Draw to protect co-tenant games.", count, what, runawayTurnStamp, cap);
+            runawayFinalizing = true;
+            try {
+                // Mirror the engine's OWN draw path, GameDrawEffect.resolve():
+                // every in-game player records an intentional draw, then the
+                // game ends with GameEndReason.Draw. Without the per-player
+                // outcomes, GameOutcome.isDraw() (which derives from player
+                // stats, not the win condition) would misreport the result.
+                for (final Player p : getPlayers()) {
+                    p.intentionalDraw();
+                }
+                setGameOver(GameEndReason.Draw);
+            } finally {
+                runawayFinalizing = false;
+            }
+        }
+        throw new RunawayGameException("Runaway game: " + count + " " + what
+                + " in one turn (cap " + cap + "); game force-ended as a draw.");
+    }
+
+    /** Endstep patch 24: per-turn trigger-fire guard, fed by
+     *  TriggerHandler.runWaitingTriggers(). */
+    public void recordTriggerFired() {
+        resetRunawayWindowOnTurnChange();
+        triggersFiredThisTurn++;
+        checkRunawayCap(triggersFiredThisTurn, runawayTriggersPerTurnCap, "triggers fired");
+    }
+    // ---- end Endstep patch 24 ----
+
     public int nextCardId() {
+        // Endstep patch 24: per-turn card-creation guard (see above).
+        resetRunawayWindowOnTurnChange();
+        cardsCreatedThisTurn++;
+        checkRunawayCap(cardsCreatedThisTurn, runawayCardsPerTurnCap, "cards created");
         return ++cardIdCounter;
     }
     public int nextHiddenCardId() {
@@ -1208,8 +1328,7 @@ public class Game {
         resetNumPiledGuessedSA();
         clearLeftBattlefieldThisTurn();
         clearLeftGraveyardThisTurn();
-        clearCounterAddedThisTurn();
-        clearCounterRemovedThisTurn();
+        clearCountersThisTurn();
         clearGlobalDamageHistory();
         // some cards need this info updated even after a player lost, so don't skip them
         for (Player player : getRegisteredPlayers()) {
@@ -1280,8 +1399,9 @@ public class Game {
         return result;
     }
 
-    public void clearCounterAddedThisTurn() {
+    public void clearCountersThisTurn() {
         countersAddedThisTurn.clear();
+        countersRemovedThisTurn.clear();
     }
 
     public void addCounterRemovedThisTurn(CounterType cType, Card card, Integer value) {
@@ -1299,10 +1419,6 @@ public class Game {
             }
         }
         return result;
-    }
-
-    public void clearCounterRemovedThisTurn() {
-        countersRemovedThisTurn.clear();
     }
 
     /**
@@ -1416,7 +1532,7 @@ public class Game {
 
     public boolean isVoid() {
         return getLeftBattlefieldThisTurn().stream().anyMatch(c -> !c.isLand()) ||
-                getStack().getSpellsCastThisTurn().stream().anyMatch(s -> s.getCastSA().isWarp());
+                getStack().getSpellsCastThisTurn().stream().anyMatch(SpellAbility::isWarp);
     }
 
     public int getAITimeout() {
