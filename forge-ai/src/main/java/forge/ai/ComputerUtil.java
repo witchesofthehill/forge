@@ -2926,7 +2926,7 @@ public class ComputerUtil {
     }
 
     public static int evaluateBoardPosition(final Player ai, final Player opponent) {
-        return AiCache.getCached("evaluateBoardPosition", ai.getGame(),
+        return AiCache.getCached("evaluateBoardPosition", (ai != null ? ai : opponent).getGame(),
                 () -> evaluateBoardPositionChanged(ai, opponent),
                 List.of(AiCache::identity, AiCache::identity), ai, opponent);
     }
