@@ -97,7 +97,11 @@ public class Game {
     private final GameLog gameLog = new GameLog();
 
     private final Zone stackZone = new Zone(ZoneType.Stack, this);
-    public int AI_TIMEOUT = 5;
+    // The AI bounds its own evaluation against a wall clock, so a faster build
+    // evaluates more candidates in the same budget and the game diverges. That
+    // makes an A/B of an engine change impossible to control. Pin the deadline
+    // high enough that it never binds and both arms play the same game.
+    public int AI_TIMEOUT = Integer.getInteger("forge.aiTimeout", 5);
     public boolean AI_CAN_USE_TIMEOUT = true;
 
     public boolean EXPERIMENTAL_RESTORE_SNAPSHOT = false;
