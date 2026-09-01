@@ -1605,6 +1605,17 @@ public class AiController {
         // in case of infinite loop reset below would not be reached
         timeoutReached = false;
 
+        // The bound below is a thread and a timed future.get, which only works
+        // where threads are real. Under GraalVM Web Image the runtime is
+        // single-threaded: the eval runs on the caller, get() finds the future
+        // already done, and the timeout never fires. Games there have no ceiling
+        // on how long a single decision may take.
+        //
+        // So bound it cooperatively as well, at the point the loop already tests
+        // for an interrupt. One clock read per candidate ability is nothing next
+        // to evaluating one, and it holds on both runtimes.
+        final long evalDeadline = System.currentTimeMillis() + game.getAITimeout() * 1000L;
+
         FutureTask<SpellAbility> future = new FutureTask<>(() -> {
             //avoid ComputerUtil.aiLifeInDanger in loops as it slows down a lot.. call this outside loops will generally be fast...
             boolean isLifeInDanger = useLivingEnd && ComputerUtil.aiLifeInDanger(player, true, 0);
@@ -1614,7 +1625,8 @@ public class AiController {
                     continue;
                 }
 
-                if (timeoutReached || Thread.currentThread().isInterrupted()) {
+                if (timeoutReached || Thread.currentThread().isInterrupted()
+                        || System.currentTimeMillis() > evalDeadline) {
                     timeoutReached = false;
                     break;
                 }
