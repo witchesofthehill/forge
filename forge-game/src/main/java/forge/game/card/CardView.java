@@ -30,6 +30,9 @@ import org.apache.commons.lang3.StringUtils;
 import java.util.*;
 
 public class CardView extends GameEntityView {
+    /** See {@link CardStateView#updateAbilityText}. Off unless asked for. */
+    static final boolean SKIP_ABILITY_TEXT = Boolean.getBoolean("forge.skipAbilityTextView");
+
     private static final long serialVersionUID = -3624090829028979255L;
 
     public static CardView get(Card c) {
@@ -1600,6 +1603,13 @@ public class CardView extends GameEntityView {
             return get(TrackableProperty.AbilityText);
         }
         void updateAbilityText(Card c, CardState state) {
+            // Rendering a card's rules text asks every conditional static
+            // ability whether it applies, and each of those filters the whole
+            // battlefield. A host that draws its own card faces never reads the
+            // result. Measured under -Dforge.skipAbilityTextView=true.
+            if (SKIP_ABILITY_TEXT) {
+                return;
+            }
             set(TrackableProperty.AbilityText, c.getAbilityText(state));
         }
         void updateKeywords(Card c, CardState state) {

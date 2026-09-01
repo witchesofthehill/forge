@@ -79,15 +79,45 @@ public final class EngineCounters {
     /** How often each property string reaches the equals chain. */
     private static final Map<String, long[]> PROPERTIES = new TreeMap<>();
 
+    /** Who asked for a validity filter, sampled, and how big the list was. */
+    private static final Map<String, long[]> CALLERS = new TreeMap<>();
+    private static final StackWalker WALKER = ENABLED
+            ? StackWalker.getInstance(java.util.Collections.emptySet(), 12)
+            : null;
+    /** One call in SAMPLE is walked. A stack walk costs far more than the count. */
+    private static final int SAMPLE = 64;
+    private static long callTick;
+
     private EngineCounters() {}
 
     /** Cards handed to a validity filter, counted without draining an iterator. */
     public static void countValidCards(Iterable<forge.game.card.Card> cardList) {
         validCardsCalls++;
         // FCollectionView extends Collection, so this covers the card collections too.
-        if (cardList instanceof java.util.Collection) {
-            validCardsExamined += ((java.util.Collection<?>) cardList).size();
+        final int size = cardList instanceof java.util.Collection
+                ? ((java.util.Collection<?>) cardList).size() : 0;
+        validCardsExamined += size;
+        if ((++callTick % SAMPLE) == 0) {
+            sampleCaller(size);
         }
+    }
+
+    /**
+     * The two frames above CardLists, and the size of the list they handed it.
+     * Sampled: a stack walk costs far more than the count it annotates, so this
+     * says where the calls come from, not what they cost.
+     */
+    private static void sampleCaller(int size) {
+        final String where = WALKER.walk(frames -> frames
+                .map(f -> f.getClassName() + "." + f.getMethodName())
+                .filter(name -> !name.startsWith("forge.game.EngineCounters")
+                        && !name.startsWith("forge.game.card.CardLists"))
+                .limit(2)
+                .reduce((a, b) -> a + " <- " + b)
+                .orElse("?"));
+        final long[] cell = CALLERS.computeIfAbsent(where, w -> new long[2]);
+        cell[0]++;
+        cell[1] += size;
     }
 
     public static void property(String property) {
@@ -112,6 +142,20 @@ public final class EngineCounters {
         num(sb, "calibrationNanos", CALIBRATION_NANOS).append(',');
         num(sb, "battlefield", battlefield);
         return sb.append('}').toString();
+    }
+
+    /** Sampled getValidCards callers: calls seen, and cards they handed over. */
+    public static String callersJson() {
+        StringBuilder sb = new StringBuilder(4096)
+                .append("{\"sample\":").append(SAMPLE).append(",\"callers\":{");
+        boolean first = true;
+        for (Map.Entry<String, long[]> e : CALLERS.entrySet()) {
+            if (!first) sb.append(',');
+            first = false;
+            sb.append('"').append(escape(e.getKey())).append("\":[")
+              .append(e.getValue()[0]).append(',').append(e.getValue()[1]).append(']');
+        }
+        return sb.append("}}").toString();
     }
 
     /** The property histogram, biggest first. Ask for this once, at the end. */
