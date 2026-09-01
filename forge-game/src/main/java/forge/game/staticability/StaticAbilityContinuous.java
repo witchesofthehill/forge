@@ -1023,6 +1023,9 @@ public final class StaticAbilityContinuous {
     }
 
     public static CardCollectionView getAffectedCards(final StaticAbility stAb, final CardCollectionView preList) {
+        if (forge.game.EngineCounters.ENABLED) {
+            forge.game.EngineCounters.affectedCardsCalls++;
+        }
         final Card hostCard = stAb.getHostCard();
         final Game game = hostCard.getGame();
         final Player controller = hostCard.getController();

@@ -1518,6 +1518,12 @@ public class AiController {
     }
 
     private SpellAbility getSpellAbilityToPlay() {
+        if (forge.game.EngineCounters.ENABLED) {
+            // The normaliser across seat counts. A "decision" here is the gap
+            // between two prompts to the human seat, which at four seats holds
+            // three AI seats taking priority where two seats holds one.
+            forge.game.EngineCounters.aiPriority++;
+        }
         if (skipped != null) {
             //FIXME: this is for failed SA to skip temporarily, don't know why AI computation for mana fails, maybe due to auto mana compute?
             for (SpellAbility sa : skipped) {

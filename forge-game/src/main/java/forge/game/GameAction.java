@@ -1075,10 +1075,17 @@ public class GameAction {
     }
     public final void checkStaticAbilities(final boolean runEvents, final Set<Card> affectedCards, final CardCollectionView preList) {
         if (isCheckingStaticAbilitiesOnHold()) {
+            if (EngineCounters.ENABLED) {
+                EngineCounters.staticPassesHeld++;
+            }
             return;
         }
         if (game.isGameOver()) {
             return;
+        }
+        if (EngineCounters.ENABLED) {
+            EngineCounters.staticPasses++;
+            EngineCounters.battlefield = game.getCardsIn(ZoneType.Battlefield).size();
         }
         game.getTracker().freeze(); //prevent views flickering during while updating for state-based effects
 
@@ -1114,6 +1121,9 @@ public class GameAction {
             return true;
         }, true);
 
+        if (EngineCounters.ENABLED) {
+            EngineCounters.staticAbilitiesSeen += staticAbilities.size();
+        }
         staticAbilities.sort(effectOrder);
 
         final Map<StaticAbility, CardCollectionView> affectedPerAbility = Maps.newHashMap();

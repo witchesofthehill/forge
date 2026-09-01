@@ -182,10 +182,17 @@ public class CardLists {
     }
 
     public static CardCollection getValidCards(Iterable<Card> cardList, String[] restrictions, Player sourceController, Card source, CardTraitBase spellAbility) {
+        if (forge.game.EngineCounters.ENABLED) {
+            forge.game.EngineCounters.countValidCards(cardList);
+        }
         return CardLists.filter(cardList, CardPredicates.restriction(restrictions, sourceController, source, spellAbility));
     }
 
     public static CardCollection getValidCards(Iterable<Card> cardList, String restriction, Player sourceController, Card source, CardTraitBase sa) {
+        if (forge.game.EngineCounters.ENABLED) {
+            forge.game.EngineCounters.countValidCards(cardList);
+            forge.game.EngineCounters.restrictionSplits++;
+        }
         return CardLists.filter(cardList, CardPredicates.restriction(restriction.split(","), sourceController, source, sa));
     }
 

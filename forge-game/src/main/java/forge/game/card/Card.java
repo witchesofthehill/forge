@@ -5758,6 +5758,27 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
     // Takes one argument like Permanent.Blue+withFlying
     @Override
     public final boolean isValid(final String restriction, final Player sourceController, final Card source, CardTraitBase spellAbility) {
+        if (!forge.game.EngineCounters.ENABLED) {
+            return isValid0(restriction, sourceController, source, spellAbility);
+        }
+        forge.game.EngineCounters.cardIsValid++;
+        if (forge.game.EngineCounters.validDepth++ > 0) {
+            try {
+                return isValid0(restriction, sourceController, source, spellAbility);
+            } finally {
+                forge.game.EngineCounters.validDepth--;
+            }
+        }
+        final long entered = System.nanoTime();
+        try {
+            return isValid0(restriction, sourceController, source, spellAbility);
+        } finally {
+            forge.game.EngineCounters.cardIsValidNanos += System.nanoTime() - entered;
+            forge.game.EngineCounters.validDepth--;
+        }
+    }
+
+    private boolean isValid0(final String restriction, final Player sourceController, final Card source, CardTraitBase spellAbility) {
         // Inclusive restrictions are Card types
         final String[] incR = restriction.split("\\.", 2);
 

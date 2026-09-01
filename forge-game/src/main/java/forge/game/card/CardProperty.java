@@ -39,6 +39,30 @@ import java.util.*;
 public class CardProperty {
 
     public static boolean cardHasProperty(Card card, String property, Player sourceController, Card source, CardTraitBase spellAbility) {
+        if (!forge.game.EngineCounters.ENABLED) {
+            return cardHasProperty0(card, property, sourceController, source, spellAbility);
+        }
+        forge.game.EngineCounters.cardHasProperty++;
+        forge.game.EngineCounters.property(property);
+        // This method re-enters itself through hasProperty on the current
+        // state, so only the outermost call is timed.
+        if (forge.game.EngineCounters.propertyDepth++ > 0) {
+            try {
+                return cardHasProperty0(card, property, sourceController, source, spellAbility);
+            } finally {
+                forge.game.EngineCounters.propertyDepth--;
+            }
+        }
+        final long entered = System.nanoTime();
+        try {
+            return cardHasProperty0(card, property, sourceController, source, spellAbility);
+        } finally {
+            forge.game.EngineCounters.cardHasPropertyNanos += System.nanoTime() - entered;
+            forge.game.EngineCounters.propertyDepth--;
+        }
+    }
+
+    private static boolean cardHasProperty0(Card card, String property, Player sourceController, Card source, CardTraitBase spellAbility) {
         final Game game = card.getGame();
         final Combat combat = game.getCombat();
         // lki can't be null but it does return this
