@@ -22,6 +22,13 @@ public class GameRules {
     // it's a preference, not rule... but I could hardly find a better place for it
     private boolean useGrayText;
 
+    // Whether the card view carries rendered rules text. A host that draws its
+    // own card faces never reads it, and building it is expensive: rendering
+    // asks every conditional static ability whether it applies, and each of
+    // those filters the whole battlefield. On a four-player Commander board
+    // that is roughly a third of all the validity checks the engine runs.
+    private boolean renderAbilityText = true;
+
     // whether to warn about cards AI can't play well
     private boolean warnAboutAICards = true;
 
@@ -140,6 +147,14 @@ public class GameRules {
     }
     public void setWarnAboutAICards(final boolean warnAboutAICards) {
         this.warnAboutAICards = warnAboutAICards;
+    }
+
+    public boolean renderAbilityText() {
+        return renderAbilityText;
+    }
+
+    public void setRenderAbilityText(final boolean render) {
+        this.renderAbilityText = render;
     }
 
     public int getSimTimeout() {

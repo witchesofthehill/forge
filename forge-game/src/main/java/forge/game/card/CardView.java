@@ -1600,6 +1600,15 @@ public class CardView extends GameEntityView {
             return get(TrackableProperty.AbilityText);
         }
         void updateAbilityText(Card c, CardState state) {
+            // Rendering asks every conditional static ability whether it
+            // applies, and each of those filters the whole battlefield, so on a
+            // wide board this is one of the more expensive things the engine
+            // does. Hosts that draw their own card faces turn it off.
+            final Game game = c.getGame();
+            if (game != null && !game.getRules().renderAbilityText()) {
+                set(TrackableProperty.AbilityText, "");
+                return;
+            }
             set(TrackableProperty.AbilityText, c.getAbilityText(state));
         }
         void updateKeywords(Card c, CardState state) {
