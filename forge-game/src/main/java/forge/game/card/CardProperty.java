@@ -959,7 +959,9 @@ public class CardProperty {
                 return false;
             }
 
-            if (!card.getZone().isCardAddedThisTurn(card, origin)) {
+            // an LKI copy (e.g. the alternate host of a spell) has no current zone
+            final Zone zone = card.getLastKnownZone();
+            if (zone == null || !zone.isCardAddedThisTurn(card, origin)) {
                 return false;
             }
         } else if (property.startsWith("ThisTurnEntered")) {
