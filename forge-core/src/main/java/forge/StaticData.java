@@ -229,6 +229,10 @@ public class StaticData {
         this.attemptToLoadCard(cardName, null);
     }
 
+    public void setMissingCardSource(CardStorageReader.MissingCardSource source) {
+        cardReader.setMissingCardSource(source);
+    }
+
     public void ensureAllCardsLoaded() {
         if (allCardsLoaded || !cardReader.isLoadingCardsLazily()) {
             return;
