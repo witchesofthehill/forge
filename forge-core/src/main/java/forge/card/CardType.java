@@ -896,29 +896,25 @@ public final class CardType implements Comparable<CardType>, CardTypeView {
         return CoreType.allCoreTypeNames;
     }
 
-    // volatile + build-local-then-publish: lazily built and shared across concurrent
-    // game threads in one JVM (Endstep) via isASubType() (a forge-game caller through
-    // Cost). Eager static init can't be used because Constant.*_TYPES are populated
-    // later at card-DB load; this never publishes a half-built/unsorted list.
-    private static volatile List<String> sortedSubTypes;
+    private static List<String> sortedSubTypes;
     public static List<String> getSortedSubTypes() {
-        List<String> local = sortedSubTypes;
-        if (local == null) {
-            local = Lists.newArrayList();
-            local.addAll(Constant.BASIC_TYPES);
-            local.addAll(Constant.LAND_TYPES);
-            local.addAll(Constant.CREATURE_TYPES);
-            local.addAll(Constant.SPELL_TYPES);
-            local.addAll(Constant.ENCHANTMENT_TYPES);
-            local.addAll(Constant.ARTIFACT_TYPES);
-            local.addAll(Constant.WALKER_TYPES);
-            local.addAll(Constant.DUNGEON_TYPES);
-            local.addAll(Constant.BATTLE_TYPES);
-            local.addAll(Constant.PLANAR_TYPES);
-            Collections.sort(local);
-            sortedSubTypes = local;
+        if (sortedSubTypes == null) {
+            // TreeSet sorts and drops duplicates (some types appear in two sections, e.g. Spacecraft);
+            // the immutable copy is built before publishing, so no caller can observe it mid-sort
+            final Set<String> tmp = new TreeSet<>();
+            tmp.addAll(Constant.BASIC_TYPES);
+            tmp.addAll(Constant.LAND_TYPES);
+            tmp.addAll(Constant.CREATURE_TYPES);
+            tmp.addAll(Constant.SPELL_TYPES);
+            tmp.addAll(Constant.ENCHANTMENT_TYPES);
+            tmp.addAll(Constant.ARTIFACT_TYPES);
+            tmp.addAll(Constant.WALKER_TYPES);
+            tmp.addAll(Constant.DUNGEON_TYPES);
+            tmp.addAll(Constant.BATTLE_TYPES);
+            tmp.addAll(Constant.PLANAR_TYPES);
+            sortedSubTypes = ImmutableList.copyOf(tmp);
         }
-        return local;
+        return sortedSubTypes;
     }
 
     public static Collection<String> getBasicTypes() {
