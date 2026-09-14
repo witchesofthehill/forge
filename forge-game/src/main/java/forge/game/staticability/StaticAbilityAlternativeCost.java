@@ -23,11 +23,19 @@ public class StaticAbilityAlternativeCost {
         list.addAll(source.getGame().getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES));
         for (final Card ca : list) {
             for (final StaticAbility stAb : ca.getStaticAbilities()) {
-                if (!stAb.checkConditions(StaticAbilityMode.AlternativeCost)) {
+                // ValidSA/ValidCard/ValidPlayer are cheap and reject almost every
+                // static for almost every ability (most are Card.Self); the
+                // conditions can scan the battlefield (IsPresent). Keep the scan
+                // behind the cheap rejection.
+                if (!stAb.checkMode(StaticAbilityMode.AlternativeCost)) {
                     continue;
                 }
 
                 if (!apply(stAb, sa, source, pl)) {
+                    continue;
+                }
+
+                if (!stAb.checkConditions()) {
                     continue;
                 }
 
