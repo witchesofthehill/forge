@@ -1096,6 +1096,27 @@ public class Game {
      *  calibration note above. */
     public static final int DEFAULT_RUNAWAY_CAP_PER_TURN = 25_000;
 
+    // The per-turn caps bound memory, not time. Every token that enters
+    // rescans the statics of a board that just grew by one, so a doubling
+    // loop (Exalted Sunborn copied by Ghired) makes the turn quadratic:
+    // 767 tokens in twenty minutes, the 25k cap never reached, the game
+    // never back at priority. Clamping the count does not help either: a
+    // board of a hundred doublers makes every later decision take minutes.
+    // So one effect asking for more copies of a token than this trips the
+    // same Draw. No printed effect asks for a hundred copies of one token.
+    public static final int DEFAULT_RUNAWAY_TOKENS_PER_EFFECT = 100;
+
+    private static volatile int runawayTokensPerEffectCap = DEFAULT_RUNAWAY_TOKENS_PER_EFFECT;
+
+    public static void setRunawayTokensPerEffectCap(final int cap) {
+        runawayTokensPerEffectCap = cap > 0 ? cap : Integer.MAX_VALUE;
+    }
+
+    public void recordTokenRequest(final int count) {
+        resetRunawayWindowOnTurnChange();
+        checkRunawayCap(count, runawayTokensPerEffectCap, "copies of one token from one effect");
+    }
+
     private static volatile int runawayCardsPerTurnCap = DEFAULT_RUNAWAY_CAP_PER_TURN;
     private static volatile int runawayTriggersPerTurnCap = DEFAULT_RUNAWAY_CAP_PER_TURN;
 
