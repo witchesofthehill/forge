@@ -2287,7 +2287,20 @@ public class ComputerUtilCombat {
 	                continue;
 	            }
 	
-	            if (!ability.hasParam("KW") || !ComputerUtilCost.canPayCost(ability, controller, false)) {
+	            // The keyword match is a string compare; canPayCost is a mana
+	            // solve. This runs once per attacker and blocker pair in every
+	            // combat prediction, so the cheap rejection goes first.
+	            if (!ability.hasParam("KW")) {
+	                continue;
+	            }
+	            boolean grants = false;
+	            for (String keyword : keywords) {
+	            	if (ability.getParam("KW").contains(keyword)) {
+	            		grants = true;
+	            		break;
+	            	}
+	            }
+	            if (!grants) {
 	                continue;
 	            }
 	            if (c != combatant) {
@@ -2302,10 +2315,8 @@ public class ComputerUtilCombat {
 	            	}
 
 	            }
-	            for (String keyword : keywords) {
-	            	if (ability.getParam("KW").contains(keyword)) {
-	            		return true;
-	            	}
+	            if (ComputerUtilCost.canPayCost(ability, controller, false)) {
+	                return true;
 	            }
 	        }
     	}
