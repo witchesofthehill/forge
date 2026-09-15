@@ -231,7 +231,15 @@ public class GameView extends TrackableObject {
                     isBlocked ? CardView.getCollection(blockers) : null,
                     CardView.getCollection(blockers));
         }
+        // a fresh view every time, so never a change in itself; attackers and
+        // blockers move the version through their cards
+        if (tracker != null) {
+            tracker.holdChangeVersion();
+        }
         set(TrackableProperty.CombatView, combatView);
+        if (tracker != null) {
+            tracker.releaseChangeVersion();
+        }
     }
 
     //TODO: Find better ways to make this information available to all GUIs without using the Game class

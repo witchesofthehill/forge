@@ -125,6 +125,25 @@ public class AiController {
         return p.getController().isAI() && ((PlayerControllerAi) p.getController()).getAi().evalDeadlinePassed();
     }
 
+    // predictNextCombatsRemainingLife is a blocker simulation per opponent and
+    // one decision asks it once per creature per candidate ability, on a board
+    // that does not move in between. Keyed on the game's state version.
+    private long remainingLifeVersion = -1;
+    private final Map<List<Object>, Integer> remainingLife = new HashMap<>();
+
+    public Integer cachedRemainingLife(final List<Object> key) {
+        if (remainingLifeVersion != game.getStateVersion()) {
+            remainingLife.clear();
+            remainingLifeVersion = game.getStateVersion();
+        }
+        return remainingLife.get(key);
+    }
+    public void cacheRemainingLife(final List<Object> key, final int value) {
+        if (remainingLifeVersion == game.getStateVersion()) {
+            remainingLife.put(key, value);
+        }
+    }
+
     public AiController(final Player computerPlayer, final Game game0) {
         player = computerPlayer;
         game = game0;

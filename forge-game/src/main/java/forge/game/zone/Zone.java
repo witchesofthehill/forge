@@ -148,6 +148,7 @@ public class Zone implements java.io.Serializable, Iterable<Card> {
             } else {
                 cardList.add(index, c);
             }
+            c.getView().setInGame(true);
         }
         onChanged();
 
@@ -165,6 +166,7 @@ public class Zone implements java.io.Serializable, Iterable<Card> {
     public void remove(final Card c) {
         game.bumpZoneVersion();
         if (cardList.remove(c)) {
+            c.getView().setInGame(false);
             onChanged();
             game.fireEvent(new GameEventZone(zoneType, getPlayer(), EventValueChangeType.Removed, c));
         }
@@ -176,6 +178,7 @@ public class Zone implements java.io.Serializable, Iterable<Card> {
         for (Card c : cards) {
             c.setZone(this);
             cardList.add(c);
+            c.getView().setInGame(true);
         }
         onChanged();
         game.fireEvent(new GameEventZone(zoneType, getPlayer(), EventValueChangeType.ComplexUpdate, null));

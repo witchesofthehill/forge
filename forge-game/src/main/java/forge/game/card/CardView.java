@@ -95,6 +95,18 @@ public class CardView extends GameEntityView {
         return false;
     }
 
+    // copies the AI builds to evaluate an option share the game's tracker but
+    // are in no zone's list; only a card that is counts as game state
+    private boolean inGame;
+
+    @Override
+    protected boolean isGameState() {
+        return inGame;
+    }
+    public void setInGame(final boolean inGame) {
+        this.inGame = inGame;
+    }
+
     public CardView(final int id0, final Tracker tracker) {
         super(id0, tracker);
         set(TrackableProperty.CurrentState, createAlternateState(CardStateName.Original));
@@ -1239,6 +1251,10 @@ public class CardView extends GameEntityView {
     }
 
     public class CardStateView extends TrackableObject implements ITranslatable {
+        @Override
+        protected boolean isGameState() {
+            return inGame;
+        }
         private static final long serialVersionUID = 6673944200513430607L;
 
         private final CardStateName state;

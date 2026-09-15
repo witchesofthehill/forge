@@ -3186,6 +3186,25 @@ public class ComputerUtil {
         return predictNextCombatsRemainingLife(ai, serious, checkDiff, payment, excludedBlockers, ai.getOpponents());
     }
     public static int predictNextCombatsRemainingLife(Player ai, boolean serious, boolean checkDiff, int payment, final CardCollection excludedBlockers, final List<Player> opps) {
+        if (!ai.getController().isAI()) {
+            return predictNextCombatsRemainingLifeUncached(ai, serious, checkDiff, payment, excludedBlockers, opps);
+        }
+        final AiController aic = ((PlayerControllerAi) ai.getController()).getAi();
+        final List<Object> key = Lists.newArrayList(serious, checkDiff, payment);
+        key.add(excludedBlockers == null ? Collections.emptyList() : excludedBlockers.stream().map(Card::getId).sorted().collect(Collectors.toList()));
+        key.add(opps.stream().map(Player::getId).collect(Collectors.toList()));
+        final Integer cached = aic.cachedRemainingLife(key);
+        if (cached != null) {
+            return cached;
+        }
+        final int result = predictNextCombatsRemainingLifeUncached(ai, serious, checkDiff, payment, excludedBlockers, opps);
+        // a budget-fired "in danger" holds only for this evaluation
+        if (result != Integer.MIN_VALUE || !aic.evalDeadlinePassed()) {
+            aic.cacheRemainingLife(key, result);
+        }
+        return result;
+    }
+    private static int predictNextCombatsRemainingLifeUncached(Player ai, boolean serious, boolean checkDiff, int payment, final CardCollection excludedBlockers, final List<Player> opps) {
         // life won't change
         int remainingLife = Integer.MAX_VALUE;
 
