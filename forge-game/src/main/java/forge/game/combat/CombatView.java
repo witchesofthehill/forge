@@ -24,6 +24,12 @@ public class CombatView extends TrackableObject {
     // Thread-safe: shared across concurrent game threads in one JVM (Endstep).
     private static final java.util.concurrent.atomic.AtomicInteger nextId = new java.util.concurrent.atomic.AtomicInteger(-2);
 
+    // attackers and blockers reach the change version through their cards
+    @Override
+    protected boolean isGameState() {
+        return false;
+    }
+
     public CombatView(final Tracker tracker) {
         super(nextId.getAndDecrement(), tracker);
         set(TrackableProperty.AttackersWithDefenders, new ConcurrentHashMap<CardView, GameEntityView>());
