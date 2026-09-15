@@ -1579,6 +1579,11 @@ public class ComputerUtilCard {
 
         //create and buff attackers
         if (phase.getPhase().isBefore(PhaseType.COMBAT_DECLARE_ATTACKERS) && phase.isPlayerTurn(ai) && opp.getLife() > 0) {
+            // each attack prediction below is a blocker simulation per opponent, and
+            // this runs per creature; past the eval deadline the answer is moot
+            if (AiController.evalDeadlinePassed(ai)) {
+                return false;
+            }
             //1. become attacker for whatever reason
             if (!doesCreatureAttackAI(ai, c) && doesSpecifiedCreatureAttackAI(ai, pumped)) {
                 float threat = 1.0f * ComputerUtilCombat.damageIfUnblocked(pumped, opp, combat, true) / opp.getLife();

@@ -3185,6 +3185,11 @@ public class ComputerUtil {
         // TODO should also consider them as teams (with increased likelihood to be attacked by multiple if ai is biggest threat)
         // TODO worth it to sort by creature amount for chance to terminate earlier?
         for (Player opp: opps) {
+            // one opponent is a full blocker assignment; past the budget answer
+            // "in danger", which is what every caller treats as the safe case
+            if (AiController.evalDeadlinePassed(ai)) {
+                return Integer.MIN_VALUE;
+            }
             Combat combat = new Combat(opp);
             boolean containsAttacker = false;
             boolean thisCombat = ai.getGame().getPhaseHandler().isPlayerTurn(opp) && ai.getGame().getPhaseHandler().getPhase().isBefore(PhaseType.COMBAT_BEGIN);
