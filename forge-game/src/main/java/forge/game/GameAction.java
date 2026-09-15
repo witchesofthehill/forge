@@ -1073,6 +1073,35 @@ public class GameAction {
     public final void checkStaticAbilities(final boolean runEvents) {
         checkStaticAbilities(runEvents, Sets.newHashSet(), CardCollection.EMPTY);
     }
+    // CR 613.8 dependency detection is a battlefield filter per pair of statics
+    // in a layer. A pass is idempotent, so the order it settled on holds for the
+    // next pass while the game's state version and the layer's statics are the
+    // same, which is every LKI pass the AI runs while enumerating its options.
+    // An LKI pass whose list has no entry yet takes the real pass's order: the
+    // LKI copy keeps the ids of its statics.
+    private static final class StaticOrder {
+        final Map<StaticAbilityLayer, Long> signature = Maps.newEnumMap(StaticAbilityLayer.class);
+        final Map<StaticAbilityLayer, List<Integer>> order = Maps.newEnumMap(StaticAbilityLayer.class);
+        Table<StaticAbility, StaticAbility, Set<StaticAbilityLayer>> dependencies;
+    }
+    private long orderCacheVersion = -1;
+    private final Map<Long, StaticOrder> orderCache = Maps.newHashMap();
+
+    private static long staticsSignature(final List<StaticAbility> statics) {
+        long h = statics.size();
+        for (final StaticAbility stAb : statics) {
+            h = h * 1000003L + stAb.getId();
+        }
+        return h;
+    }
+    private static long preListSignature(final CardCollectionView preList) {
+        long h = preList.size();
+        for (final Card c : preList) {
+            h = h * 1000003L + c.getId();
+        }
+        return h;
+    }
+
     public final void checkStaticAbilities(final boolean runEvents, final Set<Card> affectedCards, final CardCollectionView preList) {
         if (isCheckingStaticAbilitiesOnHold()) {
             return;
@@ -1081,6 +1110,7 @@ public class GameAction {
             return;
         }
         game.getTracker().freeze(); //prevent views flickering during while updating for state-based effects
+        game.getTracker().holdChangeVersion();
 
         final Map<StaticAbilityLayer, Set<Card>> affectedPerLayer = Maps.newHashMap();
 
@@ -1090,10 +1120,21 @@ public class GameAction {
         // search for cards with static abilities
         final FCollection<StaticAbility> staticAbilities = new FCollection<>();
         final CardCollection staticList = new CardCollection();
+        if (orderCacheVersion != game.getStateVersion() || orderCache.size() > 64) {
+            orderCache.clear();
+            orderCacheVersion = game.getStateVersion();
+        }
+        final long preListSignature = preListSignature(preList);
+        StaticOrder cached = orderCache.get(preListSignature);
+        if (cached == null) {
+            cached = orderCache.get(0L);
+        }
+        final StaticOrder current = new StaticOrder();
         Table<StaticAbility, StaticAbility, Set<StaticAbilityLayer>> dependencies = null;
         if (preList.isEmpty()) {
-            dependencies = HashBasedTable.create();
+            dependencies = cached != null ? cached.dependencies : HashBasedTable.create();
         }
+        current.dependencies = dependencies;
 
         game.forEachCardInGame(c -> {
             // need to get Card from preList if able
@@ -1126,12 +1167,27 @@ public class GameAction {
                 }
             }
 
+            final long signature = staticsSignature(staticsForLayer);
+            final boolean reuseOrder = cached != null && Long.valueOf(signature).equals(cached.signature.get(layer));
+            final List<Integer> cachedOrder = reuseOrder ? cached.order.get(layer) : null;
+            final List<Integer> order = Lists.newArrayList();
+            int orderIndex = 0;
+
             while (!staticsForLayer.isEmpty()) {
                 StaticAbility stAb = staticsForLayer.get(0);
-                // dependency with CDA seems unlikely
-                if (!stAb.isCharacteristicDefining()) {
+                if (cachedOrder != null) {
+                    final int wantedId = cachedOrder.get(orderIndex++);
+                    for (final StaticAbility candidate : staticsForLayer) {
+                        if (candidate.getId() == wantedId) {
+                            stAb = candidate;
+                            break;
+                        }
+                    }
+                } else if (!stAb.isCharacteristicDefining()) {
+                    // dependency with CDA seems unlikely
                     stAb = findStaticAbilityToApply(layer, staticsForLayer, preList, affectedPerAbility, dependencies);
                 }
+                order.add(stAb.getId());
                 staticsForLayer.remove(stAb);
                 final CardCollectionView previouslyAffected = affectedPerAbility.get(stAb);
                 final CardCollectionView affectedHere;
@@ -1165,11 +1221,14 @@ public class GameAction {
                 // and may change if an effect that has not yet been applied becomes
                 // dependent on or independent of one or more other effects that have not yet been applied.
             }
+            current.signature.put(layer, signature);
+            current.order.put(layer, order);
             staticAbilities.addAll(toAdd);
             for (Player p : game.getPlayers()) {
                 p.afterStaticAbilityLayer(layer);
             }
         }
+        orderCache.put(preListSignature, current);
 
         for (final CardCollectionView affected : affectedPerAbility.values()) {
             if (affected != null) {
@@ -1192,6 +1251,7 @@ public class GameAction {
                     ((GameCommand) staticCheck[3]).run();
                     toRemove.add(staticCheck);
                     affectedCards.add(c);
+                    orderCacheVersion = -1;
                 }
             }
             c.getStaticCommandList().removeAll(toRemove);
@@ -1268,6 +1328,7 @@ public class GameAction {
             game.fireEvent(new GameEventCardStatsChanged(affectedCards));
         }
         game.getTracker().unfreeze();
+        game.getTracker().releaseChangeVersion();
     }
 
     private StaticAbility findStaticAbilityToApply(StaticAbilityLayer layer, List<StaticAbility> staticsForLayer, CardCollectionView preList, Map<StaticAbility, CardCollectionView> affectedPerAbility,
