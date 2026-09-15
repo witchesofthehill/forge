@@ -420,6 +420,9 @@ public class AiAttackController {
                     // TODO predict the chance it might die if attacking
                     continue;
                 }
+                if (AiController.evalDeadlinePassed(ai)) {
+                    break;
+                }
                 notNeededAsBlockers.add(c);
                 int currentBaselineLife = ComputerUtil.predictNextCombatsRemainingLife(ai, playAggro, pilotsNonAggroDeck, 0, notNeededAsBlockers);
                 // AI doesn't know from what it will lose, so it might still keep an unnecessary blocker back sometimes
