@@ -63,7 +63,7 @@ public class RevealAi extends RevealAiBase {
             Cost playCost = new Cost(playSub.getParam("PlayCost"), false);
 
             for (SpellAbility s : c.getAllPossibleAbilities(ai, false)) {
-                if (!s.isBasicSpell()) {
+                if (!s.isBasicSpell() || !(s instanceof Spell)) {
                     continue;
                 }
                 Spell spell = (Spell) s;
@@ -96,7 +96,7 @@ public class RevealAi extends RevealAiBase {
                 return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
             }
             for (SpellAbility s : c.getAllPossibleAbilities(ai, false)) {
-                if (!s.isBasicSpell()) {
+                if (!s.isBasicSpell() || !(s instanceof Spell)) {
                     continue;
                 }
                 Spell spell = (Spell) s.copy(ai);
