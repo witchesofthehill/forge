@@ -624,7 +624,32 @@ public class Game {
         return cards;
     }
 
+    // Every StaticAbilityXxx helper asks for the cards in the static source
+    // zones on every check, and concatenating them is a fresh set of a
+    // thousand cards each time. Zones bump the version on any change, phasing
+    // included, so the last answer is reused while nothing moved.
+    private int zoneVersion;
+    private CardCollection staticSourceCards;
+    private int staticSourceCardsVersion = -1;
+
+    public void bumpZoneVersion() {
+        zoneVersion++;
+    }
+
     public CardCollectionView getCardsIn(final Iterable<ZoneType> zones) {
+        if (zones == ZoneType.STATIC_ABILITIES_SOURCE_ZONES) {
+            if (staticSourceCards != null && staticSourceCardsVersion == zoneVersion) {
+                return staticSourceCards;
+            }
+            final int version = zoneVersion;
+            staticSourceCards = collectCardsIn(zones);
+            staticSourceCardsVersion = version;
+            return staticSourceCards;
+        }
+        return collectCardsIn(zones);
+    }
+
+    private CardCollection collectCardsIn(final Iterable<ZoneType> zones) {
         CardCollection cards = new CardCollection();
         for (final ZoneType z : zones) {
             cards.addAll(getCardsIn(z));
