@@ -685,7 +685,14 @@ public class CardState implements GameObject, IHasSVars, ITranslatable {
         return abilities.add(a);
     }
 
+    private FCollection<Trigger> cachedTriggers;
+    private int cachedTriggersVersion = -1;
+
     public final FCollectionView<Trigger> getTriggers() {
+        final int version = card.getTraitsVersion();
+        if (cachedTriggers != null && cachedTriggersVersion == version) {
+            return cachedTriggers;
+        }
         FCollection<Trigger> result = new FCollection<>(triggers);
         if (getStateName().equals(CardStateName.Original)) {
             if (getCard().hasState(CardStateName.LeftSplit))
@@ -694,6 +701,8 @@ public class CardState implements GameObject, IHasSVars, ITranslatable {
                 result.addAll(getCard().getState(CardStateName.RightSplit).triggers);
         }
         card.updateTriggers(result, this);
+        cachedTriggers = result;
+        cachedTriggersVersion = version;
         return result;
     }
 
@@ -711,6 +720,7 @@ public class CardState implements GameObject, IHasSVars, ITranslatable {
     }
 
     public final boolean addTrigger(final Trigger t) {
+        card.bumpTraitsVersion();
         return triggers.add(t);
     }
 
@@ -900,6 +910,7 @@ public class CardState implements GameObject, IHasSVars, ITranslatable {
         copyFrom(source, lki, null);
     }
     public final void copyFrom(final CardState source, final boolean lki, final CardTraitBase ctb) {
+        card.bumpTraitsVersion();
         // Makes a "deeper" copy of a CardState object
         setName(source.getName());
         setType(source.type);
@@ -1007,9 +1018,11 @@ public class CardState implements GameObject, IHasSVars, ITranslatable {
                 this.landManaAbilities.put(e.getKey(), e.getValue().copy(card, true));
             }
         }
+        card.bumpTraitsVersion();
     }
 
     public final void addAbilitiesFrom(final CardState source, final boolean lki) {
+        card.bumpTraitsVersion();
         for (SpellAbility sa : source.abilities) {
             if (sa.isIntrinsic() && sa.getApi() != ApiType.PermanentCreature && sa.getApi() != ApiType.PermanentNoncreature) {
                 abilities.add(sa.copy(card, lki));
@@ -1038,6 +1051,7 @@ public class CardState implements GameObject, IHasSVars, ITranslatable {
                 staticAbilities.add(sa.copy(card, lki));
             }
         }
+        card.bumpTraitsVersion();
     }
 
     public CardState copy(final Card host, CardStateName name, final boolean lki) {
