@@ -5604,6 +5604,10 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
         return phasedOut;
     }
     public final void setPhasedOut(final Player phasedOut0) {
+        // the battlefield getter filters on this, and Game caches that answer
+        if (game != null) {
+            game.bumpZoneVersion();
+        }
         if (phasedOut == phasedOut0) { return; }
         phasedOut = phasedOut0;
         view.updatePhasedOut(this);
