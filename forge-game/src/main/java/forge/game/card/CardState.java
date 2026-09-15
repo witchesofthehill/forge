@@ -714,7 +714,18 @@ public class CardState implements GameObject, IHasSVars, ITranslatable {
         return triggers.add(t);
     }
 
+    // The mode helpers (StaticAbilityXxx.anyXxx) ask every card for this on
+    // every check, and building it was a fifth of the engine's CPU on wide
+    // boards. It is a pure function of the card's traits version, so it is
+    // rebuilt only when that moves.
+    private FCollection<StaticAbility> cachedStaticAbilities;
+    private int cachedStaticAbilitiesVersion = -1;
+
     public final FCollectionView<StaticAbility> getStaticAbilities() {
+        final int version = card.getTraitsVersion();
+        if (cachedStaticAbilities != null && cachedStaticAbilitiesVersion == version) {
+            return cachedStaticAbilities;
+        }
         FCollection<StaticAbility> result = new FCollection<>(staticAbilities);
         if (getStateName().equals(CardStateName.Original)) {
             if (getCard().hasState(CardStateName.LeftSplit))
@@ -723,12 +734,16 @@ public class CardState implements GameObject, IHasSVars, ITranslatable {
                 result.addAll(getCard().getState(CardStateName.RightSplit).staticAbilities);
         }
         card.updateStaticAbilities(result, this);
+        cachedStaticAbilities = result;
+        cachedStaticAbilitiesVersion = version;
         return result;
     }
     public final boolean addStaticAbility(StaticAbility stab) {
+        card.bumpTraitsVersion();
         return staticAbilities.add(stab);
     }
     public final boolean removeStaticAbility(StaticAbility stab) {
+        card.bumpTraitsVersion();
         return staticAbilities.remove(stab);
     }
 
@@ -926,6 +941,7 @@ public class CardState implements GameObject, IHasSVars, ITranslatable {
             }
         }
 
+        card.bumpTraitsVersion();
         staticAbilities.clear();
         for (StaticAbility sa : source.staticAbilities) {
             if (sa.isIntrinsic()) {
@@ -988,6 +1004,7 @@ public class CardState implements GameObject, IHasSVars, ITranslatable {
             }
         }
 
+        card.bumpTraitsVersion();
         for (StaticAbility sa : source.staticAbilities) {
             if (sa.isIntrinsic()) {
                 staticAbilities.add(sa.copy(card, lki));
