@@ -750,7 +750,34 @@ public class CardState implements GameObject, IHasSVars, ITranslatable {
     public FCollectionView<ReplacementEffect> getReplacementEffects() {
         return getReplacementEffects(true);
     }
+    // Same idea as the static abilities: ReplacementHandler asks every card for
+    // this on every replacement event. Two slots, one per rulesHost value.
+    private FCollection<ReplacementEffect> cachedReplacementEffects;
+    private FCollection<ReplacementEffect> cachedReplacementEffectsNoRules;
+    private int cachedReplacementEffectsVersion = -1;
+    private int cachedReplacementEffectsNoRulesVersion = -1;
+
     public FCollectionView<ReplacementEffect> getReplacementEffects(boolean rulesHost) {
+        final int version = card.getTraitsVersion();
+        if (rulesHost) {
+            if (cachedReplacementEffects != null && cachedReplacementEffectsVersion == version) {
+                return cachedReplacementEffects;
+            }
+        } else if (cachedReplacementEffectsNoRules != null && cachedReplacementEffectsNoRulesVersion == version) {
+            return cachedReplacementEffectsNoRules;
+        }
+        final FCollection<ReplacementEffect> result = buildReplacementEffects(rulesHost);
+        if (rulesHost) {
+            cachedReplacementEffects = result;
+            cachedReplacementEffectsVersion = version;
+        } else {
+            cachedReplacementEffectsNoRules = result;
+            cachedReplacementEffectsNoRulesVersion = version;
+        }
+        return result;
+    }
+
+    private FCollection<ReplacementEffect> buildReplacementEffects(boolean rulesHost) {
         FCollection<ReplacementEffect> result = new FCollection<>(replacementEffects);
         // add Split to Original
         if (getStateName().equals(CardStateName.Original)) {
@@ -783,6 +810,7 @@ public class CardState implements GameObject, IHasSVars, ITranslatable {
         return result;
     }
     public boolean addReplacementEffect(final ReplacementEffect replacementEffect) {
+        card.bumpTraitsVersion();
         return replacementEffects.add(replacementEffect);
     }
 

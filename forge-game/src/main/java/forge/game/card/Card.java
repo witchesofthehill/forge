@@ -1941,7 +1941,13 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
     }
 
     @Override
+    public void setCounters(final CounterType counterType, final Integer num) {
+        traitsVersion++;
+        super.setCounters(counterType, num);
+    }
+
     public final void setCounters(final Multiset<CounterType> allCounters) {
+        traitsVersion++;
         boolean changed = counters.contains(CounterEnumType.MANABOND) || counters.elementSet().stream().anyMatch(CounterType::isKeywordCounter);
         counters = allCounters;
         view.updateCounters(this);
@@ -1961,6 +1967,7 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
     @Override
     public final void clearCounters() {
         if (counters.isEmpty()) { return; }
+        traitsVersion++;
         boolean changed = counters.contains(CounterEnumType.MANABOND) || counters.elementSet().stream().anyMatch(CounterType::isKeywordCounter);
 
         counters.clear();
