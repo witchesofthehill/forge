@@ -108,8 +108,18 @@ public class AiController {
     private volatile long combatDeadline = Long.MAX_VALUE;
 
     public boolean evalDeadlinePassed() {
-        return System.currentTimeMillis() > Math.min(evalDeadline, combatDeadline);
+        final boolean passed = System.currentTimeMillis() > Math.min(evalDeadline, combatDeadline);
+        if (passed && TRACE_DEADLINE && !tracedPass) {
+            tracedPass = true;
+            System.err.println("[ai] budget passed for " + player + " eval=" + (evalDeadline == Long.MAX_VALUE ? "off" : "on") + " combat=" + (combatDeadline == Long.MAX_VALUE ? "off" : "on"));
+        }
+        if (!passed) {
+            tracedPass = false;
+        }
+        return passed;
     }
+    private static final boolean TRACE_DEADLINE = Boolean.getBoolean("forge.trace-deadline");
+    private boolean tracedPass;
 
     public static boolean evalDeadlinePassed(final Player p) {
         return p.getController().isAI() && ((PlayerControllerAi) p.getController()).getAi().evalDeadlinePassed();
@@ -1315,20 +1325,32 @@ public class AiController {
     public void declareBlockersFor(Player defender, Combat combat) {
         AiBlockController block = new AiBlockController(defender, defender != player);
         // When player != defender, AI should declare blockers for its benefit.
-        block.assignBlockersForCombat(combat);
+        // Same budget as an attack declaration; a partial assignment is legal.
+        final long outerCombatDeadline = combatDeadline;
+        combatDeadline = Math.min(outerCombatDeadline, System.currentTimeMillis() + game.getAITimeout() * 1000L);
+        final long startedAt = System.currentTimeMillis();
+        try {
+            block.assignBlockersForCombat(combat);
+        } finally {
+            combatDeadline = outerCombatDeadline;
+            if (TRACE_DEADLINE && System.currentTimeMillis() - startedAt > 3000) {
+                System.err.println("[ai] blockers " + player + " took " + (System.currentTimeMillis() - startedAt) + " ms");
+            }
+        }
     }
 
     public void declareAttackers(Player attacker, Combat combat) {
         // 12/2/10(sol) the decision making here has moved to getAttackers()
         // The controller's constructor already runs a combat prediction per
         // opponent to pick a defender, so the declaration budget starts here.
-        combatDeadline = System.currentTimeMillis() + game.getAITimeout() * 1000L;
+        final long outerCombatDeadline = combatDeadline;
+        combatDeadline = Math.min(outerCombatDeadline, System.currentTimeMillis() + game.getAITimeout() * 1000L);
         AiAttackController aiAtk;
         try {
             aiAtk = new AiAttackController(attacker);
             lastAttackAggression = aiAtk.declareAttackers(combat);
         } finally {
-            combatDeadline = Long.MAX_VALUE;
+            combatDeadline = outerCombatDeadline;
         }
 
         aiAtk.reinforceWithBanding(combat);
@@ -1634,7 +1656,10 @@ public class AiController {
         // So bound it cooperatively as well, at the point the loop already tests
         // for an interrupt. One clock read per candidate ability is nothing next
         // to evaluating one, and it holds on both runtimes.
-        evalDeadline = System.currentTimeMillis() + game.getAITimeout() * 1000L;
+        // nested evaluations keep the outer, tighter deadline
+        final long outerEvalDeadline = evalDeadline;
+        evalDeadline = Math.min(outerEvalDeadline, System.currentTimeMillis() + game.getAITimeout() * 1000L);
+        final long evalStartedAt = System.currentTimeMillis();
 
         FutureTask<SpellAbility> future = new FutureTask<>(() -> {
             //avoid ComputerUtil.aiLifeInDanger in loops as it slows down a lot.. call this outside loops will generally be fast...
@@ -1730,7 +1755,10 @@ public class AiController {
                 e.printStackTrace();
                 return null;
             } finally {
-                evalDeadline = Long.MAX_VALUE;
+                evalDeadline = outerEvalDeadline;
+                if (TRACE_DEADLINE && System.currentTimeMillis() - evalStartedAt > 3000) {
+                    System.err.println("[ai] eval " + player + " took " + (System.currentTimeMillis() - evalStartedAt) + " ms");
+                }
             }
         }
 
@@ -1772,7 +1800,7 @@ public class AiController {
             // TODO mark some as skipped to increase chance to find something playable next priority
             return null;
         } finally {
-            evalDeadline = Long.MAX_VALUE;
+            evalDeadline = outerEvalDeadline;
         }
     }
 
