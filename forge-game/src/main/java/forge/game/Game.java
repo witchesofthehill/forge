@@ -19,6 +19,7 @@ package forge.game;
 
 import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.HashBasedTable;
+import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Multimap;
@@ -647,6 +648,13 @@ public class Game {
     }
     public long getStateVersion() {
         return tracker.getChangeVersion();
+    }
+
+    // the lead cards first (an LKI copy stands in for its card), then the
+    // static source cards, without building a new collection per call
+    public Iterable<Card> getStaticSourceCards(final Card... lead) {
+        final List<Card> first = Arrays.asList(lead);
+        return Iterables.concat(first, Iterables.filter(getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES), c -> !first.contains(c)));
     }
 
     public CardCollectionView getCardsIn(final Iterable<ZoneType> zones) {
