@@ -91,6 +91,9 @@ public abstract class TrackableObject implements IIdentifiable, Serializable {
                 respectsFreeze = (props.get(key) != null);
             }
             if (respectsFreeze) {
+                if (isGameState()) {
+                    tracker.noteChange();
+                }
                 tracker.addDelayedPropChange(this, key, value);
                 return;
             }
@@ -102,12 +105,23 @@ public abstract class TrackableObject implements IIdentifiable, Serializable {
                 // in typical Magic game flow. Revisit if profiling shows excessive no-op deltas.
                 markDirtyForConsumers(key);
                 key.updateObjLookup(tracker, value);
+                if (tracker != null && isGameState()) {
+                    tracker.noteChange();
+                }
             }
         }
         else if (!value.equals(props.put(key, value))) {
             markDirtyForConsumers(key);
             key.updateObjLookup(tracker, value);
+            if (tracker != null && isGameState()) {
+                tracker.noteChange();
+            }
         }
+    }
+
+    // whether a change of this object moves the tracker's change version
+    protected boolean isGameState() {
+        return true;
     }
 
     /**

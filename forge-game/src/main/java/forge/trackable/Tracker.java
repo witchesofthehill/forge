@@ -36,6 +36,26 @@ public class Tracker {
 
     private final Table<TrackableType<?>, Integer, Object> objLookups = HashBasedTable.create();
 
+    // every effective property change of a tracked object; held through a region that
+    // leaves the game as it found it, such as a static-ability pass
+    private long changeVersion;
+    private int changeVersionHold;
+
+    public final long getChangeVersion() {
+        return changeVersion;
+    }
+    public final void noteChange() {
+        if (changeVersionHold == 0) {
+            changeVersion++;
+        }
+    }
+    public final void holdChangeVersion() {
+        changeVersionHold++;
+    }
+    public final void releaseChangeVersion() {
+        changeVersionHold--;
+    }
+
     public final boolean isFrozen() {
         return freezeCounter > 0;
     }
@@ -64,9 +84,11 @@ public class Tracker {
             return;
         }
         //after being unfrozen, ensure all changes delayed during freeze are now applied
+        holdChangeVersion();
         for (final DelayedPropChange change : delayedPropChanges) {
             change.object.set(change.prop, change.value);
         }
+        releaseChangeVersion();
         delayedPropChanges.clear();
     }
 
