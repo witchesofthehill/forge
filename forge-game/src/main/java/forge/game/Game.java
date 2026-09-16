@@ -630,6 +630,15 @@ public class Game {
 
     public void bumpZoneVersion() {
         zoneVersion++;
+        bumpStateVersion();
+    }
+
+    // GameAction keys the static-ability application order on it
+    public void bumpStateVersion() {
+        tracker.noteChange();
+    }
+    public long getStateVersion() {
+        return tracker.getChangeVersion();
     }
 
     public CardCollectionView getCardsIn(final Iterable<ZoneType> zones) {

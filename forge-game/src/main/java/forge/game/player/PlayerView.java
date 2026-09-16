@@ -234,7 +234,14 @@ public class PlayerView extends GameEntityView {
         return get(TrackableProperty.HasPriority);
     }
     public void setHasPriority(final boolean val) {
+        // who holds priority is not board state
+        if (tracker != null) {
+            tracker.holdChangeVersion();
+        }
         set(TrackableProperty.HasPriority, val);
+        if (tracker != null) {
+            tracker.releaseChangeVersion();
+        }
     }
 
     public int getMaxHandSize() {

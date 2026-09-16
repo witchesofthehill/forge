@@ -23,6 +23,12 @@ public class CombatView extends TrackableObject {
     // Negative IDs avoid tracker registration (only id >= 0 is registered).
     private static int nextId = -2;
 
+    // attackers and blockers reach the change version through their cards
+    @Override
+    protected boolean isGameState() {
+        return false;
+    }
+
     public CombatView(final Tracker tracker) {
         super(nextId--, tracker);
         set(TrackableProperty.AttackersWithDefenders, new ConcurrentHashMap<CardView, GameEntityView>());
