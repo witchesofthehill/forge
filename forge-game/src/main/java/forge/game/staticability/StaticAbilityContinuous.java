@@ -1077,14 +1077,6 @@ public final class StaticAbilityContinuous {
                 affectedCardsOriginal = new CardCollection(affectedCards);
             }
 
-            // Self, EnchantedBy, EquippedBy and IsRemembered can only ever
-            // match a handful of cards; the filter below still decides, it
-            // just no longer walks the whole battlefield to reject the rest.
-            final CardCollection candidates = knownAffectedCandidates(stAb.getParam("Affected"), hostCard);
-            if (candidates != null) {
-                affectedCards.retainAll(candidates);
-            }
-
             affectedCards = CardLists.getValidCards(affectedCards, stAb.getParam("Affected"), controller, hostCard, stAb);
 
             // Add back all cards that are in other player's graveyard, and meet the restrictions without YouOwn/YouCtrl (treat it as in your graveyard)
@@ -1103,50 +1095,5 @@ public final class StaticAbilityContinuous {
 
         affectedCards.removeAll(stAb.getIgnoreEffectCards());
         return affectedCards;
-    }
-
-    /**
-     * The cards a single-restriction Affected$ could match through one of its
-     * properties, or null when no property bounds the set. Mirrors the
-     * matching tests in CardProperty: Self is the host, EnchantedBy, EquippedBy
-     * and AttachedBy without an argument are what the host is attached to,
-     * IsRemembered are the host's remembered cards.
-     */
-    private static CardCollection knownAffectedCandidates(final String affected, final Card hostCard) {
-        if (affected.indexOf(',') >= 0) {
-            return null;
-        }
-        final int dot = affected.indexOf('.');
-        if (dot < 0) {
-            return null;
-        }
-        CardCollection candidates = null;
-        for (final String prop : affected.substring(dot + 1).split("\\+")) {
-            CardCollection these = null;
-            if (prop.startsWith("Self")) {
-                these = new CardCollection(hostCard);
-            } else if (prop.equals("EnchantedBy") || prop.equals("EquippedBy") || prop.equals("AttachedBy")) {
-                these = new CardCollection();
-                if (hostCard.getEntityAttachedTo() instanceof Card attachedTo) {
-                    these.add(attachedTo);
-                }
-            } else if (prop.equals("IsRemembered")) {
-                these = new CardCollection();
-                for (final Object o : hostCard.getRemembered()) {
-                    if (o instanceof Card c) {
-                        these.add(c);
-                    }
-                }
-            }
-            if (these == null) {
-                continue;
-            }
-            if (candidates == null) {
-                candidates = these;
-            } else {
-                candidates.retainAll(these);
-            }
-        }
-        return candidates;
     }
 }
