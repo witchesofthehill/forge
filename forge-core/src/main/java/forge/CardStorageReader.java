@@ -77,6 +77,19 @@ public class CardStorageReader {
 
     private final boolean loadCardsLazily;
 
+    /**
+     * Raw scripts keyed by card name, for a lazily loaded card that is not on
+     * disk. The answer may carry more cards than asked for; every script is
+     * kept and each name is asked for at most once.
+     */
+    public interface MissingCardSource {
+        Map<String, String> find(String cardName);
+    }
+
+    private MissingCardSource missingCardSource;
+    private final Map<String, String> fetchedScripts = new HashMap<>();
+    private final Set<String> unavailableFromSource = new HashSet<>();
+
     public CardStorageReader(final String cardDataDir, final CardStorageReader.ProgressObserver progressObserver, boolean loadCardsLazily) {
         this.progressObserver = progressObserver != null ? progressObserver : CardStorageReader.ProgressObserver.emptyObserver;
         this.cardsfolder = new File(cardDataDir);
@@ -118,6 +131,10 @@ public class CardStorageReader {
 
     boolean isLoadingCardsLazily() {
         return loadCardsLazily;
+    }
+
+    public void setMissingCardSource(final MissingCardSource source) {
+        this.missingCardSource = source;
     }
 
     private List<CardRules> loadCardsInRange(final List<File> files, final int from, final int to) {
@@ -189,7 +206,32 @@ public class CardStorageReader {
         if (file != null) {
             return loadCard(rulesReader, file);
         }
+        final String script = fetchScript(cardName, transformedName);
+        if (script != null) {
+            return loadCard(rulesReader, script, transformedName);
+        }
         return null;
+    }
+
+    private String fetchScript(final String cardName, final String transformedName) {
+        String script = fetchedScripts.get(transformedName);
+        if (script != null || missingCardSource == null || unavailableFromSource.contains(transformedName)) {
+            return script;
+        }
+        final Map<String, String> found = missingCardSource.find(cardName);
+        if (found != null) {
+            for (final Map.Entry<String, String> entry : found.entrySet()) {
+                final String key = transformName(StringUtils.stripAccents(entry.getKey()));
+                if (!key.isEmpty() && entry.getValue() != null) {
+                    fetchedScripts.put(key, entry.getValue());
+                }
+            }
+        }
+        script = fetchedScripts.get(transformedName);
+        if (script == null) {
+            unavailableFromSource.add(transformedName);
+        }
+        return script;
     }
 
     private <T> NavigableMap<String, T> buildCardNameIndex(List<T> sources, BiFunction<CardRules.Reader, T, CardRules> loader) {
@@ -447,6 +489,17 @@ public class CardStorageReader {
             return rules;
         } catch (final IOException exn) {
             throw new RuntimeException(exn);
+        }
+    }
+
+    private CardRules loadCard(final CardRules.Reader reader, final String script, final String name) {
+        try (InputStream in = new ByteArrayInputStream(script.getBytes(this.charset))) {
+            reader.reset();
+            final CardRules rules = reader.readCard(readScript(in), name);
+            rules.setPath(new File(cardsfolder, name + CARD_FILE_DOT_EXTENSION).getPath());
+            return rules;
+        } catch (final Exception ex) {
+            throw new RuntimeException("Error loading cardscript " + name + " handed over for a card missing on disk.", ex);
         }
     }
 
