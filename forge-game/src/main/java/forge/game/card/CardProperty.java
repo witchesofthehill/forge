@@ -61,7 +61,11 @@ public class CardProperty {
             return card.getCurrentState().getTypeWithChanges().hasStringType(property);
         }
 
-        if (property.equals("noName")) {
+        if (property.equals("IsCommander")) {
+            if (!card.isCommander()) {
+                return false;
+            }
+        } else if (property.equals("noName")) {
             if (!card.hasNoName()) {
                 return false;
             }
@@ -1970,10 +1974,6 @@ public class CardProperty {
             final ZoneType realZone = ZoneType.smartValueOf(strZone);
 
             if (!card.isInZone(realZone)) {
-                return false;
-            }
-        } else if (property.equals("IsCommander")) {
-            if (!card.isCommander()) {
                 return false;
             }
         } else if (property.startsWith("NotedFor")) {
