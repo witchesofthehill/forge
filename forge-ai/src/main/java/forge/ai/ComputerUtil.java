@@ -1433,6 +1433,9 @@ public class ComputerUtil {
                     }
 
                     final String affected = stAb.getParam("Affected");
+                    if (stAb.hasParam("AffectedDefined") || affected == null) {
+                        continue;
+                    }
                     if (affected.startsWith("Creature") && (affected.contains("YouCtrl") || !affected.contains("."))) {
                         return true;
                     }
@@ -1484,7 +1487,8 @@ public class ComputerUtil {
             for (final Card c : opp) {
                 for (StaticAbility stAb : c.getStaticAbilities()) {
                     if (stAb.checkMode(StaticAbilityMode.Continuous) && stAb.hasParam("AddKeyword")
-                            && stAb.getParam("AddKeyword").contains("Haste")) {
+                            && stAb.getParam("AddKeyword").contains("Haste")
+                            && !stAb.hasParam("AffectedDefined") && stAb.hasParam("Affected")) {
                         final ArrayList<String> affected = Lists.newArrayList(stAb.getParam("Affected").split(","));
                         if (affected.contains("Creature")) {
                             return true;
@@ -3173,6 +3177,25 @@ public class ComputerUtil {
         return predictNextCombatsRemainingLife(ai, serious, checkDiff, payment, excludedBlockers, ai.getOpponents());
     }
     public static int predictNextCombatsRemainingLife(Player ai, boolean serious, boolean checkDiff, int payment, final CardCollection excludedBlockers, final List<Player> opps) {
+        if (!ai.getController().isAI()) {
+            return predictNextCombatsRemainingLifeUncached(ai, serious, checkDiff, payment, excludedBlockers, opps);
+        }
+        final AiController aic = ((PlayerControllerAi) ai.getController()).getAi();
+        final List<Object> key = Lists.newArrayList(serious, checkDiff, payment);
+        key.add(excludedBlockers == null ? Collections.emptyList() : excludedBlockers.stream().map(Card::getId).sorted().collect(Collectors.toList()));
+        key.add(opps.stream().map(Player::getId).collect(Collectors.toList()));
+        final Integer cached = aic.cachedRemainingLife(key);
+        if (cached != null) {
+            return cached;
+        }
+        final int result = predictNextCombatsRemainingLifeUncached(ai, serious, checkDiff, payment, excludedBlockers, opps);
+        // a budget-fired "in danger" holds only for this evaluation
+        if (result != Integer.MIN_VALUE || !aic.evalDeadlinePassed()) {
+            aic.cacheRemainingLife(key, result);
+        }
+        return result;
+    }
+    private static int predictNextCombatsRemainingLifeUncached(Player ai, boolean serious, boolean checkDiff, int payment, final CardCollection excludedBlockers, final List<Player> opps) {
         // life won't change
         int remainingLife = Integer.MAX_VALUE;
 
@@ -3185,6 +3208,11 @@ public class ComputerUtil {
         // TODO should also consider them as teams (with increased likelihood to be attacked by multiple if ai is biggest threat)
         // TODO worth it to sort by creature amount for chance to terminate earlier?
         for (Player opp: opps) {
+            // one opponent is a full blocker assignment; past the budget answer
+            // "in danger", which is what every caller treats as the safe case
+            if (AiController.evalDeadlinePassed(ai)) {
+                return Integer.MIN_VALUE;
+            }
             Combat combat = new Combat(opp);
             boolean containsAttacker = false;
             boolean thisCombat = ai.getGame().getPhaseHandler().isPlayerTurn(opp) && ai.getGame().getPhaseHandler().getPhase().isBefore(PhaseType.COMBAT_BEGIN);

@@ -28,6 +28,11 @@ public class SpellAbilityView extends TrackableObject implements IHasCardView {
     SpellAbilityView(final SpellAbility sa) {
         this(sa, sa.getHostCard() == null || sa.getHostCard().getGame() == null ? null : sa.getHostCard().getGame().getTracker());
     }
+    @Override
+    protected boolean isGameState() {
+        return false;
+    }
+
     SpellAbilityView(final SpellAbility sa, Tracker tracker) {
         super(sa.getId(), tracker);
         updateHostCard(sa);

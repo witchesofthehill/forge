@@ -61,6 +61,7 @@ public class Zone implements java.io.Serializable, Iterable<Card> {
             .thenComparing(Card::hasPerpetual);
 
     protected void sort() {
+        game.bumpZoneVersion();
         cardList.sort(COMPARATOR);
     }
 
@@ -81,6 +82,7 @@ public class Zone implements java.io.Serializable, Iterable<Card> {
     }
 
     public final void reorder(final Card c, final int index) {
+        game.bumpZoneVersion();
         cardList.remove(c);
         cardList.add(index, c);
     }
@@ -140,11 +142,13 @@ public class Zone implements java.io.Serializable, Iterable<Card> {
         c.setZone(this);
 
         if ((zoneType == ZoneType.Battlefield || !c.isToken() || c.getCurrentStateName() == CardStateName.PreparedSpell) || (zoneType == ZoneType.Stack && c.getCopiedPermanent() != null)) {
+            game.bumpZoneVersion();
             if (index == null) {
                 cardList.add(c);
             } else {
                 cardList.add(index, c);
             }
+            c.getView().setInGame(true);
         }
         onChanged();
 
@@ -160,17 +164,21 @@ public class Zone implements java.io.Serializable, Iterable<Card> {
     }
 
     public void remove(final Card c) {
+        game.bumpZoneVersion();
         if (cardList.remove(c)) {
+            c.getView().setInGame(false);
             onChanged();
             game.fireEvent(new GameEventZone(zoneType, getPlayer(), EventValueChangeType.Removed, c));
         }
     }
 
     public final void setCards(final Iterable<Card> cards) {
+        game.bumpZoneVersion();
         cardList.clear();
         for (Card c : cards) {
             c.setZone(this);
             cardList.add(c);
+            c.getView().setInGame(true);
         }
         onChanged();
         game.fireEvent(new GameEventZone(zoneType, getPlayer(), EventValueChangeType.ComplexUpdate, null));
@@ -178,7 +186,8 @@ public class Zone implements java.io.Serializable, Iterable<Card> {
 
     public final void removeAllCards(boolean forcedWithoutEvents) {
         if (forcedWithoutEvents) {
-            cardList.clear();
+            game.bumpZoneVersion();
+        cardList.clear();
         } else {
             for (Card c : cardList) {
                 remove(c);
@@ -259,6 +268,7 @@ public class Zone implements java.io.Serializable, Iterable<Card> {
     }
 
     public void shuffle() {
+        game.bumpZoneVersion();
         Collections.shuffle(cardList, MyRandom.getRandom());
         onChanged();
     }
