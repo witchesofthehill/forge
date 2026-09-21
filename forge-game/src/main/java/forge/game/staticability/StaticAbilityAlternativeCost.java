@@ -7,7 +7,6 @@ import com.google.common.collect.Lists;
 
 import forge.card.mana.ManaCostParser;
 import forge.game.card.Card;
-import forge.game.card.CardCollection;
 import forge.game.cost.Cost;
 import forge.game.player.Player;
 import forge.game.spellability.OptionalCost;
@@ -18,10 +17,8 @@ public class StaticAbilityAlternativeCost {
 
     public static List<SpellAbility> alternativeCosts(final SpellAbility sa, final Card source, final Player pl) {
         List<SpellAbility> result = Lists.newArrayList();
-        // add source first in case it's LKI (alternate host)
-        CardCollection list = new CardCollection(source);
-        list.addAll(source.getGame().getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES));
-        for (final Card ca : list) {
+        // source first in case it's LKI (alternate host)
+        for (final Card ca : source.getGame().getStaticSourceCards(source)) {
             for (final StaticAbility stAb : ca.getStaticAbilities()) {
                 if (!stAb.checkMode(StaticAbilityMode.AlternativeCost)) {
                     continue;

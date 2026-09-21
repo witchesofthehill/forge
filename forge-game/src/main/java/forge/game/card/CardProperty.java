@@ -4,6 +4,7 @@ import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
 import forge.StaticData;
 import forge.card.CardDb;
+import forge.card.CardType;
 import forge.card.ColorSet;
 import forge.card.MagicColor;
 import forge.card.mana.ManaCost;
@@ -55,7 +56,16 @@ public class CardProperty {
             }
         }
 
-        if (property.equals("noName")) {
+        // a bare core type or supertype only ends at the type check at the bottom
+        if (CardType.isACardType(property) || CardType.isASupertype(property)) {
+            return card.getCurrentState().getTypeWithChanges().hasStringType(property);
+        }
+
+        if (property.equals("IsCommander")) {
+            if (!card.isCommander()) {
+                return false;
+            }
+        } else if (property.equals("noName")) {
             if (!card.hasNoName()) {
                 return false;
             }
@@ -1964,10 +1974,6 @@ public class CardProperty {
             final ZoneType realZone = ZoneType.smartValueOf(strZone);
 
             if (!card.isInZone(realZone)) {
-                return false;
-            }
-        } else if (property.equals("IsCommander")) {
-            if (!card.isCommander()) {
                 return false;
             }
         } else if (property.startsWith("NotedFor")) {
