@@ -113,6 +113,7 @@ public abstract class TokenEffectBase extends SpellAbilityEffect {
             Player creator = c.getRowKey();
             Player controller = prototype.getController();
             int cellAmount = c.getValue();
+            game.recordTokenRequest(cellAmount);
 
             for (int i = 0; i < cellAmount; i++) {
                 Card tok = new CardCopyService(prototype).copyCard(true);

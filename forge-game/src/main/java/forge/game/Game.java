@@ -19,6 +19,7 @@ package forge.game;
 
 import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.HashBasedTable;
+import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Multimap;
@@ -416,7 +417,11 @@ public class Game {
     }
 
     public final PlayerCollection getPlayersInTurnOrder(Player p) {
-        final PlayerCollection players = new PlayerCollection(getPlayersInTurnOrder());
+        // with at most two players left, either direction gives the same list once rotated to start
+        // at p, so the turn order check, which scans every card for a reversal effect, cannot matter
+        final boolean directionIrrelevant = ingamePlayers.size() <= 2 && ingamePlayers.contains(p);
+        final PlayerCollection players = new PlayerCollection(
+                directionIrrelevant ? ingamePlayers : getPlayersInTurnOrder());
 
         int i = players.indexOf(p);
         Collections.rotate(players, -i);
@@ -605,7 +610,7 @@ public class Game {
         return card == null ? null : card.getLastKnownZone();
     }
 
-    public synchronized CardCollectionView getCardsIn(final ZoneType zone) {
+    public CardCollectionView getCardsIn(final ZoneType zone) {
         if (zone == ZoneType.Stack) {
             return getStackZone().getCards();
         }
@@ -624,10 +629,58 @@ public class Game {
         return cards;
     }
 
+    // Every StaticAbilityXxx helper asks for the cards in the static source
+    // zones on every check, and concatenating them is a fresh set of a
+    // thousand cards each time. Zones bump the version on any change, phasing
+    // included, so the last answer is reused while nothing moved.
+    private int zoneVersion;
+    private CardCollection staticSourceCards;
+    private int staticSourceCardsVersion = -1;
+
+    public void bumpZoneVersion() {
+        zoneVersion++;
+        bumpStateVersion();
+    }
+
+    // GameAction keys the static-ability application order on it
+    public void bumpStateVersion() {
+        tracker.noteChange();
+    }
+    public long getStateVersion() {
+        return tracker.getChangeVersion();
+    }
+
+    // the lead cards first (an LKI copy stands in for its card), then the
+    // static source cards, without building a new collection per call
+    public Iterable<Card> getStaticSourceCards(final Card... lead) {
+        final List<Card> first = Arrays.asList(lead);
+        return Iterables.concat(first, Iterables.filter(getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES), c -> !first.contains(c)));
+    }
+
     public CardCollectionView getCardsIn(final Iterable<ZoneType> zones) {
+        if (zones == ZoneType.STATIC_ABILITIES_SOURCE_ZONES) {
+            if (staticSourceCards != null && staticSourceCardsVersion == zoneVersion) {
+                return staticSourceCards;
+            }
+            final int version = zoneVersion;
+            staticSourceCards = collectCardsIn(zones);
+            staticSourceCardsVersion = version;
+            return staticSourceCards;
+        }
+        return collectCardsIn(zones);
+    }
+
+    private CardCollection collectCardsIn(final Iterable<ZoneType> zones) {
         CardCollection cards = new CardCollection();
         for (final ZoneType z : zones) {
-            cards.addAll(getCardsIn(z));
+            if (z == ZoneType.Stack) {
+                cards.addAll(getStackZone().getCards());
+                continue;
+            }
+            // adding each player's zone to the result directly avoids building a collection per zone
+            for (final Player p : getPlayers()) {
+                cards.addAll(p.getCardsIn(z));
+            }
         }
         return cards;
     }
@@ -1084,6 +1137,27 @@ public class Game {
     /** Default per-turn cap for both guarded quantities. See the
      *  calibration note above. */
     public static final int DEFAULT_RUNAWAY_CAP_PER_TURN = 25_000;
+
+    // The per-turn caps bound memory, not time. Every token that enters
+    // rescans the statics of a board that just grew by one, so a doubling
+    // loop (Exalted Sunborn copied by Ghired) makes the turn quadratic:
+    // 767 tokens in twenty minutes, the 25k cap never reached, the game
+    // never back at priority. Clamping the count does not help either: a
+    // board of a hundred doublers makes every later decision take minutes.
+    // So one effect asking for more copies of a token than this trips the
+    // same Draw. No printed effect asks for a hundred copies of one token.
+    public static final int DEFAULT_RUNAWAY_TOKENS_PER_EFFECT = 100;
+
+    private static volatile int runawayTokensPerEffectCap = DEFAULT_RUNAWAY_TOKENS_PER_EFFECT;
+
+    public static void setRunawayTokensPerEffectCap(final int cap) {
+        runawayTokensPerEffectCap = cap > 0 ? cap : Integer.MAX_VALUE;
+    }
+
+    public void recordTokenRequest(final int count) {
+        resetRunawayWindowOnTurnChange();
+        checkRunawayCap(count, runawayTokensPerEffectCap, "copies of one token from one effect");
+    }
 
     private static volatile int runawayCardsPerTurnCap = DEFAULT_RUNAWAY_CAP_PER_TURN;
     private static volatile int runawayTriggersPerTurnCap = DEFAULT_RUNAWAY_CAP_PER_TURN;

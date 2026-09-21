@@ -139,6 +139,8 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
 
     // x=timestamp y=StaticAbility id
     private final Table<Long, Long, CardTraitChanges> changedCardTraitsByText = TreeBasedTable.create(); // Layer 3 by Text Change
+    // Bumped by everything that feeds CardState.getStaticAbilities, which caches on it.
+    private int traitsVersion;
     private final Table<Long, Long, ICardTraitChanges> changedCardTraits = TreeBasedTable.create(); // Layer 6
 
     // stores the card traits created by static abilities
@@ -406,11 +408,17 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
         this(id0, paperCard0, game0, game0 == null ? null : game0.getTracker());
     }
     public Card(final int id0, final IPaperCard paperCard0, final Game game0, final Tracker tracker0) {
+        this(id0, paperCard0, game0, tracker0, false);
+    }
+    // textFromSource: the caller sets the view's ability text itself, so there is no point computing it
+    public Card(final int id0, final IPaperCard paperCard0, final Game game0, final Tracker tracker0,
+            final boolean textFromSource) {
         super(id0);
 
         game = game0;
         paperCard = paperCard0;
-        view = game0 != null && game0.isNoGUIUser() ? new DummyCardView(id0, tracker0) : new CardView(id0, tracker0);
+        view = textFromSource || (game0 != null && game0.isNoGUIUser())
+                ? new DummyCardView(id0, tracker0) : new CardView(id0, tracker0);
         currentState = new CardState(view.getCurrentState(), this);
         states.put(CardStateName.Original, currentState);
         view.updateChangedColorWords(this);
@@ -964,7 +972,6 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
     public final String getName() {
         return getName(currentState);
     }
-
     public final String getName(CardState state) {
         String name = state.getName();
         for (CardChangedName change : this.changedCardNames.values()) {
@@ -978,7 +985,6 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
     public final String getDisplayName() {
         return getDisplayName(currentState);
     }
-
     public final String getDisplayName(CardState state) {
         //If this card has a changed name, don't use flavor names.
         if(state.getFlavorName() == null || hasNameOverwrite())
@@ -1935,7 +1941,13 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
     }
 
     @Override
+    public void setCounters(final CounterType counterType, final Integer num) {
+        bumpTraitsVersion();
+        super.setCounters(counterType, num);
+    }
+
     public final void setCounters(final Multiset<CounterType> allCounters) {
+        bumpTraitsVersion();
         boolean changed = counters.contains(CounterEnumType.MANABOND) || counters.elementSet().stream().anyMatch(CounterType::isKeywordCounter);
         counters = allCounters;
         view.updateCounters(this);
@@ -1955,6 +1967,7 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
     @Override
     public final void clearCounters() {
         if (counters.isEmpty()) { return; }
+        bumpTraitsVersion();
         boolean changed = counters.contains(CounterEnumType.MANABOND) || counters.elementSet().stream().anyMatch(CounterType::isKeywordCounter);
 
         counters.clear();
@@ -3409,6 +3422,18 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
         return currentState.hasSpellAbility(id);
     }
 
+    public final int getTraitsVersion() {
+        return traitsVersion;
+    }
+    public final void bumpTraitsVersion() {
+        traitsVersion++;
+        // an LKI copy is not part of the game state; a card without a zone is
+        // either that or one being built, and entering a zone bumps anyway
+        if (game != null && !isLKI() && getZone() != null) {
+            game.bumpStateVersion();
+        }
+    }
+
     public boolean hasRemoveIntrinsic() {
         if (changedCardTypes.isEmpty()) {
             return false;
@@ -4138,6 +4163,7 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
     }
 
     public final void updateTypeCache() {
+        bumpTraitsVersion();
         this.getCurrentState().updateTypes();
     }
 
@@ -4344,7 +4370,6 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
     public final Table<Long, Long, Pair<Integer, Integer>> getSetPTTable() {
         return newPT;
     }
-
     public final void setPTTable(Table<Long, Long, Pair<Integer, Integer>> table) {
         newPT.clear();
         newPT.putAll(table);
@@ -4353,7 +4378,6 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
     public final Table<Long, Long, Pair<Integer, Integer>> getSetPTCharacterDefiningTable() {
         return newPTCharacterDefining;
     }
-
     public final void setPTCharacterDefiningTable(Table<Long, Long, Pair<Integer, Integer>> table) {
         newPTCharacterDefining.clear();
         newPTCharacterDefining.putAll(table);
@@ -4532,11 +4556,9 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
         return assignNoCombatDamage() ? 0 : (toughnessAssignsDamage() ? getNetToughnessBreakdown() : getNetPowerBreakdown()).getTotal();
     }
 
-    // for cards like Giant Growth, etc.
     public final int getTempPowerBoost() {
         return boostPT.values().stream().mapToInt(Pair::getLeft).sum();
     }
-
     public final int getTempToughnessBoost() {
         return boostPT.values().stream().mapToInt(Pair::getRight).sum();
     }
@@ -4544,15 +4566,13 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
     public void addPTBoost(final int power, final int toughness, final long timestamp, final long staticId) {
         boostPT.put(timestamp, staticId, Pair.of(power, toughness));
     }
-
     public boolean removePTBoost(final long timestamp, final long staticId) {
         return boostPT.remove(timestamp, staticId) != null;
     }
 
     public Table<Long, Long, Pair<Integer, Integer>> getPTBoostTable() {
-        return ImmutableTable.copyOf(boostPT);
+        return boostPT;
     }
-
     public void setPTBoost(Table<Long, Long, Pair<Integer, Integer>> table) {
         this.boostPT.clear();
         boostPT.putAll(table);
@@ -4867,6 +4887,7 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
         return changedCardTraitsByText;
     }
     public final void setChangedCardTraitsByText(Table<Long, Long, CardTraitChanges> changes) {
+        bumpTraitsVersion();
         changedCardTraitsByText.clear();
         for (Table.Cell<Long, Long, CardTraitChanges> e : changes.cellSet()) {
             changedCardTraitsByText.put(e.getRowKey(), e.getColumnKey(), e.getValue().copy(this, true));
@@ -4874,6 +4895,7 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
     }
     public final void addChangedCardTraitsByText(Collection<SpellAbility> spells,
             Collection<Trigger> trigger, Collection<ReplacementEffect> replacements, Collection<StaticAbility> statics, long timestamp, long staticId) {
+        bumpTraitsVersion();
         changedCardTraitsByText.put(timestamp, staticId, new CardTraitChanges(
             spells, trigger, replacements, statics, e -> true
         ));
@@ -4898,6 +4920,7 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
         return addChangedCardTraits(result, timestamp, staticId, updateView);
     }
     public final ICardTraitChanges addChangedCardTraits(ICardTraitChanges changes, long timestamp, long staticId, boolean updateView) {
+        bumpTraitsVersion();
         changedCardTraits.put(timestamp, staticId, changes);
         if (updateView) {
             updateAbilityTextForView();
@@ -4906,9 +4929,11 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
     }
 
     public final boolean removeChangedCardTraits(long timestamp, long staticId) {
+        bumpTraitsVersion();
         return changedCardTraits.remove(timestamp, staticId) != null;
     }
     public final boolean removeChangedCardTraitsByText(long timestamp, long staticId) {
+        bumpTraitsVersion();
         return changedCardTraitsByText.remove(timestamp, staticId) != null;
     }
 
@@ -4928,6 +4953,7 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
     }
 
     public final void setChangedCardTraits(Table<Long, Long, ICardTraitChanges> changes) {
+        bumpTraitsVersion();
         changedCardTraits.clear();
         for (Table.Cell<Long, Long, ICardTraitChanges> e : changes.cellSet()) {
             changedCardTraits.put(e.getRowKey(), e.getColumnKey(), e.getValue().copy(this, true));
@@ -4935,6 +4961,7 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
     }
 
     public boolean clearChangedCardTraits() {
+        bumpTraitsVersion();
         boolean changed = false;
         if (!changedCardTraitsByText.isEmpty()) {
             changed = true;
@@ -5166,6 +5193,7 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
         updateKeywordsCache(getCurrentState());
     }
     public final void updateKeywordsCache(final CardState state) {
+        bumpTraitsVersion();
         KeywordCollection keywords = new KeywordCollection();
 
         // Layer 1
@@ -5582,6 +5610,10 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
     }
     public final void setPhasedOut(final Player phasedOut0) {
         if (phasedOut == phasedOut0) { return; }
+        // the battlefield getter filters on this, and Game caches that answer
+        if (game != null && getZone() != null) {
+            game.bumpZoneVersion();
+        }
         phasedOut = phasedOut0;
         view.updatePhasedOut(this);
     }
@@ -7245,7 +7277,7 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
             requestedCMC = getState(CardStateName.Original).getManaCost().getCMC();
         } else if (currentStateName == CardStateName.Meld) {
             // to follow the rules (but we shouldn't get here while cloned)
-            if (getCopiedPermanent() != null) {
+            if (getCopiedPermanent() != null || this.getMeldedWith() == null) {
                 return 0;
             }
             // Melded creatures have a combined CMC of each of their parts

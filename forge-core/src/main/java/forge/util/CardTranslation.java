@@ -278,18 +278,13 @@ public class CardTranslation {
             translatednames = new HashMap<>();
             translatedtypes = new HashMap<>();
             translatedoracles = new HashMap<>();
-            // Thread-safe: oracleMappings, translatedCaches, sharedCache, translatedEffectNames
-            // and translatedTokenNames are all memoized DURING gameplay (buildOracleMapping /
-            // translateSingleDescriptionText / translateEffectNames / translateTokenName)
-            // and shared across concurrent games in one JVM (Endstep); translatednames/
-            // types/oracles above are written once here at language load. A plain HashMap
-            // can corrupt under concurrent put. Allocating the lazy ones here too closes
-            // their check-then-act init race.
-            oracleMappings = new java.util.concurrent.ConcurrentHashMap<>();
+            // These caches are shared across concurrent games, and translatedCaches is
+            // also read from the game thread and the EDT.
+            oracleMappings = new ConcurrentHashMap<>();
             translatedCaches = new ConcurrentHashMap<>();
             sharedCache = new ConcurrentHashMap<>();
-            translatedEffectNames = new java.util.concurrent.ConcurrentHashMap<>();
-            translatedTokenNames = new java.util.concurrent.ConcurrentHashMap<>();
+            translatedEffectNames = new ConcurrentHashMap<>();
+            translatedTokenNames = new ConcurrentHashMap<>();
             readTranslationFile(languageSelected, languagesDirectory);
         }
     }

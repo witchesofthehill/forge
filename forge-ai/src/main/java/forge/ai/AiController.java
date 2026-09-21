@@ -97,6 +97,52 @@ public class AiController {
     private boolean useLivingEnd;
     private List<SpellAbility> skipped;
     private volatile boolean timeoutReached;
+    // The cooperative deadline of chooseSpellAbilityToPlayFromList, visible to
+    // the helpers that do the work between two abilities. The loop over
+    // abilities checks the clock, but one ability's evaluation can run a
+    // blocker simulation per creature per opponent and never come back to it.
+    private volatile long evalDeadline = Long.MAX_VALUE;
+    // A real attack declaration's own budget; notNeededAsBlockers runs a blocker
+    // simulation per opponent for each creature it considers holding back, so a
+    // declaration on a wide board has no natural bound. Past it the rest stay home.
+    private volatile long combatDeadline = Long.MAX_VALUE;
+
+    public boolean evalDeadlinePassed() {
+        final boolean passed = System.currentTimeMillis() > Math.min(evalDeadline, combatDeadline);
+        if (passed && TRACE_DEADLINE && !tracedPass) {
+            tracedPass = true;
+            System.err.println("[ai] budget passed for " + player + " eval=" + (evalDeadline == Long.MAX_VALUE ? "off" : "on") + " combat=" + (combatDeadline == Long.MAX_VALUE ? "off" : "on"));
+        }
+        if (!passed) {
+            tracedPass = false;
+        }
+        return passed;
+    }
+    private static final boolean TRACE_DEADLINE = Boolean.getBoolean("forge.trace-deadline");
+    private boolean tracedPass;
+
+    public static boolean evalDeadlinePassed(final Player p) {
+        return p.getController().isAI() && ((PlayerControllerAi) p.getController()).getAi().evalDeadlinePassed();
+    }
+
+    // predictNextCombatsRemainingLife is a blocker simulation per opponent and
+    // one decision asks it once per creature per candidate ability, on a board
+    // that does not move in between. Keyed on the game's state version.
+    private long remainingLifeVersion = -1;
+    private final Map<List<Object>, Integer> remainingLife = new HashMap<>();
+
+    public Integer cachedRemainingLife(final List<Object> key) {
+        if (remainingLifeVersion != game.getStateVersion()) {
+            remainingLife.clear();
+            remainingLifeVersion = game.getStateVersion();
+        }
+        return remainingLife.get(key);
+    }
+    public void cacheRemainingLife(final List<Object> key, final int value) {
+        if (remainingLifeVersion == game.getStateVersion()) {
+            remainingLife.put(key, value);
+        }
+    }
 
     public AiController(final Player computerPlayer, final Game game0) {
         player = computerPlayer;
@@ -1298,13 +1344,33 @@ public class AiController {
     public void declareBlockersFor(Player defender, Combat combat) {
         AiBlockController block = new AiBlockController(defender, defender != player);
         // When player != defender, AI should declare blockers for its benefit.
-        block.assignBlockersForCombat(combat);
+        // Same budget as an attack declaration; a partial assignment is legal.
+        final long outerCombatDeadline = combatDeadline;
+        combatDeadline = Math.min(outerCombatDeadline, System.currentTimeMillis() + game.getAITimeout() * 1000L);
+        final long startedAt = System.currentTimeMillis();
+        try {
+            block.assignBlockersForCombat(combat);
+        } finally {
+            combatDeadline = outerCombatDeadline;
+            if (TRACE_DEADLINE && System.currentTimeMillis() - startedAt > 3000) {
+                System.err.println("[ai] blockers " + player + " took " + (System.currentTimeMillis() - startedAt) + " ms");
+            }
+        }
     }
 
     public void declareAttackers(Player attacker, Combat combat) {
         // 12/2/10(sol) the decision making here has moved to getAttackers()
-        AiAttackController aiAtk = new AiAttackController(attacker);
-        lastAttackAggression = aiAtk.declareAttackers(combat);
+        // The controller's constructor already runs a combat prediction per
+        // opponent to pick a defender, so the declaration budget starts here.
+        final long outerCombatDeadline = combatDeadline;
+        combatDeadline = Math.min(outerCombatDeadline, System.currentTimeMillis() + game.getAITimeout() * 1000L);
+        AiAttackController aiAtk;
+        try {
+            aiAtk = new AiAttackController(attacker);
+            lastAttackAggression = aiAtk.declareAttackers(combat);
+        } finally {
+            combatDeadline = outerCombatDeadline;
+        }
 
         aiAtk.reinforceWithBanding(combat);
 
@@ -1609,7 +1675,10 @@ public class AiController {
         // So bound it cooperatively as well, at the point the loop already tests
         // for an interrupt. One clock read per candidate ability is nothing next
         // to evaluating one, and it holds on both runtimes.
-        final long evalDeadline = System.currentTimeMillis() + game.getAITimeout() * 1000L;
+        // nested evaluations keep the outer, tighter deadline
+        final long outerEvalDeadline = evalDeadline;
+        evalDeadline = Math.min(outerEvalDeadline, System.currentTimeMillis() + game.getAITimeout() * 1000L);
+        final long evalStartedAt = System.currentTimeMillis();
 
         FutureTask<SpellAbility> future = new FutureTask<>(() -> {
             //avoid ComputerUtil.aiLifeInDanger in loops as it slows down a lot.. call this outside loops will generally be fast...
@@ -1704,6 +1773,11 @@ public class AiController {
             } catch (InterruptedException | ExecutionException e) {
                 e.printStackTrace();
                 return null;
+            } finally {
+                evalDeadline = outerEvalDeadline;
+                if (TRACE_DEADLINE && System.currentTimeMillis() - evalStartedAt > 3000) {
+                    System.err.println("[ai] eval " + player + " took " + (System.currentTimeMillis() - evalStartedAt) + " ms");
+                }
             }
         }
 
@@ -1744,6 +1818,8 @@ public class AiController {
             }
             // TODO mark some as skipped to increase chance to find something playable next priority
             return null;
+        } finally {
+            evalDeadline = outerEvalDeadline;
         }
     }
 
