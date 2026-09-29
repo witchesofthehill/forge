@@ -59,6 +59,10 @@ public class ThreadUtil {
     }
 
     public static ScheduledFuture<?> delay(int milliseconds, Runnable inputUpdater) {
+        // No thread to run it on. Every caller is a UI timer that tolerates null.
+        if (SYNCHRONOUS) {
+            return null;
+        }
         return getScheduledPool().schedule(inputUpdater, milliseconds, TimeUnit.MILLISECONDS);
     }
 
