@@ -8,6 +8,7 @@ public class GameRules {
     private boolean manaBurn;
     private boolean orderCombatants;
     private int poisonCountersToLose = 10; // is commonly 10, but turns into 15 for 2HG
+    private int commanderDamageToLose = 21;
     private int gamesPerMatch = 3;
     private int gamesToWinMatch = 2;
     private boolean playForAnte = false;
@@ -59,6 +60,13 @@ public class GameRules {
     }
     public void setPoisonCountersToLose(final int amount) {
         this.poisonCountersToLose = amount;
+    }
+
+    public int getCommanderDamageToLose() {
+        return commanderDamageToLose;
+    }
+    public void setCommanderDamageToLose(final int amount) {
+        this.commanderDamageToLose = amount;
     }
 
     public int getGamesPerMatch() {
