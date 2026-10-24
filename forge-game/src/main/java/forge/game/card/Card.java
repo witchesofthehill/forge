@@ -8019,7 +8019,8 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
     }
 
     public Set<CardStateName> getLockedRooms() {
-        Set<CardStateName> result = Sets.newHashSet(CardStateName.LeftSplit, CardStateName.RightSplit);
+        // Room choice indices must not depend on enum identity hashes across JVMs.
+        Set<CardStateName> result = EnumSet.of(CardStateName.LeftSplit, CardStateName.RightSplit);
         result.removeAll(this.unlockedRooms);
         return result;
     }
