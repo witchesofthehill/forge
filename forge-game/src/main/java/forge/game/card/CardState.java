@@ -48,6 +48,7 @@ import forge.util.ITranslatable;
 import forge.util.IterableUtil;
 import forge.util.collect.FCollection;
 import forge.util.collect.FCollectionView;
+import forge.util.collect.FSnapshotTable;
 import io.sentry.Breadcrumb;
 import io.sentry.Sentry;
 
@@ -84,6 +85,13 @@ public class CardState implements GameObject, IHasSVars, ITranslatable {
     private FCollection<Trigger> triggers = new FCollection<>();
     private FCollection<ReplacementEffect> replacementEffects = new FCollection<>();
     private FCollection<StaticAbility> staticAbilities = new FCollection<>();
+    // bumped after every change of staticAbilities (see getStaticAbilities)
+    private int staticAbilitiesVersion = 0;
+    private volatile StaticAbilitiesCache staticCache = null;
+    // bumped after every change of replacementEffects (see getReplacementEffects)
+    private int replacementEffectsVersion = 0;
+    private volatile ReplacementEffectsCache replacementCacheRules = null;
+    private volatile ReplacementEffectsCache replacementCacheNoRules = null;
     private String imageKey = "";
     private Map<String, String> sVars = Maps.newTreeMap();
     private Map<String, SpellAbility> abilityForTrigger = Maps.newHashMap();
@@ -107,6 +115,7 @@ public class CardState implements GameObject, IHasSVars, ITranslatable {
     private ReplacementEffect sagaRep;
     private ReplacementEffect adventureRep;
     private ReplacementEffect omenRep;
+    private ReplacementEffect vengeanceRep;
 
     private SpellAbility manifestUp;
     private SpellAbility cloakUp;
@@ -496,22 +505,22 @@ public class CardState implements GameObject, IHasSVars, ITranslatable {
 
         // SpellPermanent only for Original State
         switch(getStateName()) {
-        case Backside:
-            if (!getCard().isModal()) {
+            case Backside:
+                if (!getCard().isModal()) {
+                    return;
+                }
+                break;
+            case Original:
+            case LeftSplit:
+            case RightSplit:
+            case SpecializeB:
+            case SpecializeG:
+            case SpecializeR:
+            case SpecializeU:
+            case SpecializeW:
+                break;
+            default:
                 return;
-            }
-            break;
-        case Original:
-        case LeftSplit:
-        case RightSplit:
-        case SpecializeB:
-        case SpecializeG:
-        case SpecializeR:
-        case SpecializeU:
-        case SpecializeW:
-            break;
-        default:
-            return;
         }
         // if card has left or right split, disable intrinsic Spell for original
         if (getStateName().equals(CardStateName.Original) && (getCard().hasState(CardStateName.LeftSplit) || getCard().hasState(CardStateName.RightSplit))) {
@@ -529,7 +538,7 @@ public class CardState implements GameObject, IHasSVars, ITranslatable {
         } else if (type.isPermanent()) {
             if (abilities.anyMatch(s -> (
                     s.isBasicSpell() && s.getSubAbility() == null && (ApiType.PermanentCreature.equals(s.getApi()) || ApiType.PermanentNoncreature.equals(s.getApi())))
-                )) {
+            )) {
                 return;
             }
 
@@ -563,12 +572,12 @@ public class CardState implements GameObject, IHasSVars, ITranslatable {
                 return list;
             }
             for (MagicColor.Color c : MagicColor.Color.values()) {
-               if (c.getBasicLandType() == null) {
-                   continue;
-               }
-               if (type.hasSubtype(c.getBasicLandType())) {
-                   list.add(state.getLandManaForColor(c));
-               }
+                if (c.getBasicLandType() == null) {
+                    continue;
+                }
+                if (type.hasSubtype(c.getBasicLandType())) {
+                    list.add(state.getLandManaForColor(c));
+                }
             }
             return list;
         }
@@ -724,18 +733,46 @@ public class CardState implements GameObject, IHasSVars, ITranslatable {
         return triggers.add(t);
     }
 
-    // The mode helpers (StaticAbilityXxx.anyXxx) ask every card for this on
-    // every check, and building it was a fifth of the engine's CPU on wide
-    // boards. It is a pure function of the card's traits version, so it is
-    // rebuilt only when that moves.
-    private FCollection<StaticAbility> cachedStaticAbilities;
-    private int cachedStaticAbilitiesVersion = -1;
-
     public final FCollectionView<StaticAbility> getStaticAbilities() {
-        final int version = card.getTraitsVersion();
-        if (cachedStaticAbilities != null && cachedStaticAbilitiesVersion == version) {
-            return cachedStaticAbilities;
+        final Object traits = FSnapshotTable.versionOf(card.getChangedCardTraits());
+        final Object traitsByText = FSnapshotTable.versionOf(card.getChangedCardTraitsByText());
+        if (traits == null || traitsByText == null) {
+            return buildStaticAbilities();
         }
+
+        CardState left = null;
+        CardState right = null;
+        if (getStateName().equals(CardStateName.Original)) {
+            if (getCard().hasState(CardStateName.LeftSplit))
+                left = getCard().getState(CardStateName.LeftSplit);
+            if (getCard().hasState(CardStateName.RightSplit))
+                right = getCard().getState(CardStateName.RightSplit);
+        }
+        final int leftVersion = left == null ? -1 : left.staticAbilitiesStamp();
+        final int rightVersion = right == null ? -1 : right.staticAbilitiesStamp();
+        final int ownVersion = staticAbilitiesStamp();
+        final boolean removeIntrinsic = card.hasRemoveIntrinsic();
+        final KeywordCollection keywords = cachedKeywords;
+
+        final StaticAbilitiesCache cache = staticCache;
+        if (cache != null && cache.traits == traits && cache.traitsByText == traitsByText
+                && cache.keywords == keywords && cache.removeIntrinsic == removeIntrinsic
+                && cache.ownVersion == ownVersion
+                && cache.leftVersion == leftVersion && cache.rightVersion == rightVersion) {
+            return cache.value.shareCopy();
+        }
+
+        final FCollection<StaticAbility> result = buildStaticAbilities();
+        staticCache = new StaticAbilitiesCache(result, traits, traitsByText, keywords, removeIntrinsic,
+                ownVersion, leftVersion, rightVersion);
+        return result.shareCopy();
+    }
+
+    private int staticAbilitiesStamp() {
+        return card.getTraitsVersion() + staticAbilitiesVersion + staticAbilities.version();
+    }
+
+    private FCollection<StaticAbility> buildStaticAbilities() {
         FCollection<StaticAbility> result = new FCollection<>(staticAbilities);
         if (getStateName().equals(CardStateName.Original)) {
             if (getCard().hasState(CardStateName.LeftSplit))
@@ -744,50 +781,110 @@ public class CardState implements GameObject, IHasSVars, ITranslatable {
                 result.addAll(getCard().getState(CardStateName.RightSplit).staticAbilities);
         }
         card.updateStaticAbilities(result, this);
-        cachedStaticAbilities = result;
-        cachedStaticAbilitiesVersion = version;
         return result;
+    }
+
+    /** Immutable holder so the cached list and the stamps it was built from are published together. */
+    private static final class StaticAbilitiesCache {
+        final FCollection<StaticAbility> value;
+        final Object traits;
+        final Object traitsByText;
+        final KeywordCollection keywords;
+        final boolean removeIntrinsic;
+        final int ownVersion;
+        final int leftVersion;
+        final int rightVersion;
+
+        StaticAbilitiesCache(FCollection<StaticAbility> value, Object traits, Object traitsByText,
+                             KeywordCollection keywords, boolean removeIntrinsic, int ownVersion, int leftVersion, int rightVersion) {
+            this.value = value;
+            this.traits = traits;
+            this.traitsByText = traitsByText;
+            this.keywords = keywords;
+            this.removeIntrinsic = removeIntrinsic;
+            this.ownVersion = ownVersion;
+            this.leftVersion = leftVersion;
+            this.rightVersion = rightVersion;
+        }
     }
     public final boolean addStaticAbility(StaticAbility stab) {
         card.bumpTraitsVersion();
-        return staticAbilities.add(stab);
+        final boolean changed = staticAbilities.add(stab);
+        staticAbilitiesVersion++;
+        return changed;
     }
     public final boolean removeStaticAbility(StaticAbility stab) {
         card.bumpTraitsVersion();
-        return staticAbilities.remove(stab);
+        final boolean changed = staticAbilities.remove(stab);
+        staticAbilitiesVersion++;
+        return changed;
     }
 
     public FCollectionView<ReplacementEffect> getReplacementEffects() {
         return getReplacementEffects(true);
     }
-    // Same idea as the static abilities: ReplacementHandler asks every card for
-    // this on every replacement event. Two slots, one per rulesHost value.
-    private FCollection<ReplacementEffect> cachedReplacementEffects;
-    private FCollection<ReplacementEffect> cachedReplacementEffectsNoRules;
-    private int cachedReplacementEffectsVersion = -1;
-    private int cachedReplacementEffectsNoRulesVersion = -1;
-
     public FCollectionView<ReplacementEffect> getReplacementEffects(boolean rulesHost) {
-        final int version = card.getTraitsVersion();
-        if (rulesHost) {
-            if (cachedReplacementEffects != null && cachedReplacementEffectsVersion == version) {
-                return cachedReplacementEffects;
-            }
-        } else if (cachedReplacementEffectsNoRules != null && cachedReplacementEffectsNoRulesVersion == version) {
-            return cachedReplacementEffectsNoRules;
+        final Object traits = FSnapshotTable.versionOf(card.getChangedCardTraits());
+        final Object traitsByText = FSnapshotTable.versionOf(card.getChangedCardTraitsByText());
+        if (traits == null || traitsByText == null) {
+            return buildReplacementEffects(rulesHost);
         }
+
+        CardState left = null;
+        CardState right = null;
+        if (getStateName().equals(CardStateName.Original)) {
+            if (getCard().hasState(CardStateName.LeftSplit))
+                left = getCard().getState(CardStateName.LeftSplit);
+            if (getCard().hasState(CardStateName.RightSplit))
+                right = getCard().getState(CardStateName.RightSplit);
+        }
+        final int leftVersion = left == null ? -1 : left.replacementEffectsStamp();
+        final int rightVersion = right == null ? -1 : right.replacementEffectsStamp();
+        final int ownVersion = replacementEffectsStamp();
+        final int flags = replacementFlags(rulesHost);
+        final KeywordCollection keywords = cachedKeywords;
+
+        final ReplacementEffectsCache cache = rulesHost ? replacementCacheRules : replacementCacheNoRules;
+        if (cache != null && cache.traits == traits && cache.traitsByText == traitsByText
+                && cache.keywords == keywords && cache.flags == flags
+                && cache.ownVersion == ownVersion
+                && cache.leftVersion == leftVersion && cache.rightVersion == rightVersion) {
+            return cache.value.shareCopy();
+        }
+
         final FCollection<ReplacementEffect> result = buildReplacementEffects(rulesHost);
+        final ReplacementEffectsCache fresh = new ReplacementEffectsCache(result, traits, traitsByText, keywords,
+                flags, ownVersion, leftVersion, rightVersion);
         if (rulesHost) {
-            cachedReplacementEffects = result;
-            cachedReplacementEffectsVersion = version;
+            replacementCacheRules = fresh;
         } else {
-            cachedReplacementEffectsNoRules = result;
-            cachedReplacementEffectsNoRulesVersion = version;
+            replacementCacheNoRules = fresh;
         }
-        return result;
+        return result.shareCopy();
     }
 
-    private FCollection<ReplacementEffect> buildReplacementEffects(boolean rulesHost) {
+    private int replacementEffectsStamp() {
+        return card.getTraitsVersion() + replacementEffectsVersion + replacementEffects.version();
+    }
+
+    private int replacementFlags(final boolean rulesHost) {
+        int flags = card.hasRemoveIntrinsic() ? 1 : 0;
+        final CardTypeView typeWithChanges = getTypeWithChanges();
+        if (typeWithChanges.isPlaneswalker()) flags |= 2;
+        if (typeWithChanges.isBattle()) flags |= 4;
+        if (typeWithChanges.isSaga()) flags |= 8;
+        if (rulesHost) {
+            if (type.hasSubtype("Adventure")) flags |= 16;
+            if (type.hasSubtype("Omen")) flags |= 32;
+            if (card.getCounters(CounterEnumType.SHIELD) > 0) flags |= 64;
+            if (card.getCounters(CounterEnumType.STUN) > 0) flags |= 128;
+            if (card.getCounters(CounterEnumType.FINALITY) > 0) flags |= 256;
+            if (type.hasSubtype("Vengeance")) flags |= 512;
+        }
+        return flags;
+    }
+
+    private FCollection<ReplacementEffect> buildReplacementEffects(final boolean rulesHost) {
         FCollection<ReplacementEffect> result = new FCollection<>(replacementEffects);
         // add Split to Original
         if (getStateName().equals(CardStateName.Original)) {
@@ -816,12 +913,44 @@ public class CardState implements GameObject, IHasSVars, ITranslatable {
             }
             result.add(omenRep);
         }
+        if (type.hasSubtype("Vengeance")) {
+            if (this.vengeanceRep == null) {
+                vengeanceRep = CardFactoryUtil.setupVengeanceAbility(this);
+            }
+            result.add(vengeanceRep);
+        }
 
         return result;
     }
+
+    /** Immutable holder so the cached list and the stamps it was built from are published together. */
+    private static final class ReplacementEffectsCache {
+        final FCollection<ReplacementEffect> value;
+        final Object traits;
+        final Object traitsByText;
+        final KeywordCollection keywords;
+        final int flags;
+        final int ownVersion;
+        final int leftVersion;
+        final int rightVersion;
+
+        ReplacementEffectsCache(FCollection<ReplacementEffect> value, Object traits, Object traitsByText,
+                                KeywordCollection keywords, int flags, int ownVersion, int leftVersion, int rightVersion) {
+            this.value = value;
+            this.traits = traits;
+            this.traitsByText = traitsByText;
+            this.keywords = keywords;
+            this.flags = flags;
+            this.ownVersion = ownVersion;
+            this.leftVersion = leftVersion;
+            this.rightVersion = rightVersion;
+        }
+    }
     public boolean addReplacementEffect(final ReplacementEffect replacementEffect) {
         card.bumpTraitsVersion();
-        return replacementEffects.add(replacementEffect);
+        final boolean changed = replacementEffects.add(replacementEffect);
+        replacementEffectsVersion++;
+        return changed;
     }
 
     public final boolean hasReplacementEffect(final ReplacementEffect re) {
@@ -981,12 +1110,14 @@ public class CardState implements GameObject, IHasSVars, ITranslatable {
         }
 
         card.bumpTraitsVersion();
+        replacementEffectsVersion++;
         staticAbilities.clear();
         for (StaticAbility sa : source.staticAbilities) {
             if (sa.isIntrinsic()) {
                 staticAbilities.add(sa.copy(card, lki));
             }
         }
+        staticAbilitiesVersion++;
         if (lki) {
             this.changedType = source.changedType;
             if (source.landAbility != null) {
@@ -1012,6 +1143,9 @@ public class CardState implements GameObject, IHasSVars, ITranslatable {
             }
             if (source.omenRep != null) {
                 omenRep = source.omenRep.copy(card, true);
+            }
+            if (source.vengeanceRep != null) {
+                vengeanceRep = source.vengeanceRep.copy(card, true);
             }
 
             for (Map.Entry<MagicColor.Color, SpellAbility> e : source.landManaAbilities.entrySet()) {
@@ -1044,6 +1178,7 @@ public class CardState implements GameObject, IHasSVars, ITranslatable {
                 replacementEffects.add(re.copy(card, lki));
             }
         }
+        replacementEffectsVersion++;
 
         card.bumpTraitsVersion();
         for (StaticAbility sa : source.staticAbilities) {
@@ -1052,6 +1187,7 @@ public class CardState implements GameObject, IHasSVars, ITranslatable {
             }
         }
         card.bumpTraitsVersion();
+        staticAbilitiesVersion++;
     }
 
     public CardState copy(final Card host, CardStateName name, final boolean lki) {
