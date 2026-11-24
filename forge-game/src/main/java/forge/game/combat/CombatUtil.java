@@ -707,28 +707,33 @@ public class CombatUtil {
         return validateBlockRestrictions(combat, defender, CardLists.filterControlledBy(combat.getAllBlockers(), defender.getSharedTeam()));
     }
 
+    public static String getBlockerRestriction(final Card blocker, final List<Card> blockers, final int blockerCount) {
+        if (blockerCount < 2 && (blocker.hasKeyword("CARDNAME can't attack or block alone.")
+                || blocker.hasKeyword("CARDNAME can't block alone."))) {
+            return "can't block alone.";
+        }
+        if (blockerCount < 3 && blocker.hasKeyword("CARDNAME can't block unless at least two other creatures block.")) {
+            return "can't block unless at least two other creatures block.";
+        }
+        if (blocker.hasKeyword("CARDNAME can't block unless a creature with greater power also blocks.")) {
+            final int power = blocker.getNetPower();
+            for (final Card other : blockers) {
+                if (other.getNetPower() > power) {
+                    return null;
+                }
+            }
+            return "can't block unless a creature with greater power also blocks.";
+        }
+        return null;
+    }
+
     /** Checks the restrictions that depend on the other blockers and on the number of blockers per attacker. */
     public static String validateBlockRestrictions(final Combat combat, final Player defending, final List<Card> blockers) {
         // Creatures that aren't allowed to block unless certain restrictions are met.
         for (final Card blocker : blockers) {
-            boolean cantBlockAlone = blocker.hasKeyword("CARDNAME can't attack or block alone.") || blocker.hasKeyword("CARDNAME can't block alone.");
-            if (blockers.size() < 2 && cantBlockAlone) {
-                return TextUtil.concatWithSpace(blocker.toString(), "can't block alone.");
-            } else if (blockers.size() < 3 && blocker.hasKeyword("CARDNAME can't block unless at least two other creatures block.")) {
-                return TextUtil.concatWithSpace(blocker.toString(), "can't block unless at least two other creatures block.");
-            } else if (blocker.hasKeyword("CARDNAME can't block unless a creature with greater power also blocks.")) {
-                boolean found = false;
-                int power = blocker.getNetPower();
-                // Note: This is O(n^2), but there shouldn't generally be many creatures with the above keyword.
-                for (Card blocker2 : blockers) {
-                    if (blocker2.getNetPower() > power) {
-                        found = true;
-                        break;
-                    }
-                }
-                if (!found) {
-                    return TextUtil.concatWithSpace(blocker.toString(), "can't block unless a creature with greater power also blocks.");
-                }
+            final String restriction = getBlockerRestriction(blocker, blockers, blockers.size());
+            if (restriction != null) {
+                return TextUtil.concatWithSpace(blocker.toString(), restriction);
             }
         }
 

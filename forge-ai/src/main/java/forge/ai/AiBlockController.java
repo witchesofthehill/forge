@@ -1080,20 +1080,27 @@ public class AiBlockController {
                 continue;
             }
 
+            final CardCollection teamBlockers = CardLists.filterControlledBy(combat.getAllBlockers(), ai.getSharedTeam());
+            final int blockerCount = teamBlockers.size() + minimum - assigned;
+            final List<Card> candidates = new ArrayList<>(blockersLeft);
+            candidates.sort(Comparator.comparingInt(Card::getNetPower).reversed());
             final CardCollection helpers = new CardCollection();
-            for (final Card blocker : blockersLeft) {
+            for (final Card blocker : candidates) {
                 if (!combat.getAttackersBlockedBy(blocker).isEmpty()
                         || !CombatUtil.canBlock(attacker, blocker, combat)
-                        || CombatUtil.getBlockCost(ai.getGame(), blocker, attacker) != null) {
+                        || CombatUtil.getBlockCost(ai.getGame(), blocker, attacker) != null
+                        || CombatUtil.getBlockerRestriction(blocker, teamBlockers, blockerCount) != null) {
                     continue;
                 }
                 combat.addBlocker(attacker, blocker);
                 helpers.add(blocker);
+                teamBlockers.add(blocker);
                 if (assigned + helpers.size() == minimum) {
                     break;
                 }
             }
-            if (CombatUtil.canAttackerBeBlockedWithAmount(attacker, assigned + helpers.size(), combat)) {
+            if (CombatUtil.canAttackerBeBlockedWithAmount(attacker, assigned + helpers.size(), combat)
+                    && teamBlockers.stream().allMatch(b -> CombatUtil.getBlockerRestriction(b, teamBlockers, blockerCount) == null)) {
                 blockersLeft.removeAll(helpers);
             } else {
                 for (final Card blocker : helpers) {
