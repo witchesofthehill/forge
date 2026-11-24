@@ -221,9 +221,10 @@ public abstract class SpellAbility extends CardTraitBase implements ISpellAbilit
     public final int getId() {
         return id;
     }
+    private static final int CLASS_HASH = SpellAbility.class.hashCode();
     @Override
     public int hashCode() {
-        return Objects.hash(SpellAbility.class, getId());
+        return 31 * (31 + CLASS_HASH) + getId();
     }
     @Override
     public boolean equals(final Object obj) {
@@ -805,6 +806,9 @@ public abstract class SpellAbility extends CardTraitBase implements ISpellAbilit
     public boolean isOmen() {
         return getCardStateName() == CardStateName.Secondary && getCardState().getType().hasSubtype("Omen");
     }
+    public boolean isVengeance() {
+        return getCardStateName() == CardStateName.Secondary && getCardState().getType().hasSubtype("Vengeance");
+    }
 
     public final boolean isCurse() {
         return hasParam("IsCurse");
@@ -822,10 +826,6 @@ public abstract class SpellAbility extends CardTraitBase implements ISpellAbilit
     }
     public void setPayCosts(final Cost abCost) {
         payCosts = abCost;
-    }
-
-    public boolean costHasX() {
-        return getPayCosts().hasXInAnyCostPart();
     }
 
     public boolean costHasManaX() {
@@ -983,14 +983,6 @@ public abstract class SpellAbility extends CardTraitBase implements ISpellAbilit
         triggeringObjects.put(type, o);
     }
 
-    public void setTriggeringObjectsFrom(final Map<AbilityKey, Object> runParams, final AbilityKey... types) {
-        for (AbilityKey type : types) {
-            if (runParams.containsKey(type)) {
-                triggeringObjects.put(type, runParams.get(type));
-            }
-        }
-    }
-
     public boolean hasTriggeringObject(final AbilityKey type) {
         return triggeringObjects.containsKey(type);
     }
@@ -1020,14 +1012,7 @@ public abstract class SpellAbility extends CardTraitBase implements ISpellAbilit
     }
 
     public void resetOnceResolved() {
-        //resetPaidHash(); // FIXME: if uncommented, breaks Dragon Presence, e.g. Orator of Ojutai + revealing a Dragon from hand.
-        // Is it truly necessary at this point? The paid hash seems to be reset on all SA instance operations.
-        // Epic spell keeps original targets
-        if (!this.getHostCard().hasKeyword(Keyword.EPIC)) {
-            resetTargets();
-        }
         resetTriggeringObjects();
-
         if (isActivatedAbility()) {
             setXManaCostPaid(null);
         }
@@ -1360,7 +1345,6 @@ public abstract class SpellAbility extends CardTraitBase implements ISpellAbilit
         }
         return triggerObj;
     }
-
     public void setTrigger(final Trigger t) {
         triggerObj = t;
     }
@@ -1721,6 +1705,9 @@ public abstract class SpellAbility extends CardTraitBase implements ISpellAbilit
     public boolean isUndoable() {
         return undoable && payCosts.isUndoable() && getHostCard().isInPlay();
     }
+    public void setUndoable(boolean b) {
+        undoable = b;
+    }
 
     public boolean undo() {
         if (isUndoable() && getActivatingPlayer().getManaPool().accountFor(getManaPart())) {
@@ -1728,10 +1715,6 @@ public abstract class SpellAbility extends CardTraitBase implements ISpellAbilit
             return true;
         }
         return false;
-    }
-
-    public void setUndoable(boolean b) {
-        undoable = b;
     }
 
     public boolean isCastFromPlayEffect() {
@@ -2171,6 +2154,10 @@ public abstract class SpellAbility extends CardTraitBase implements ISpellAbilit
                 } else {
                     targetingPlayer = getActivatingPlayer();
                 }
+                if (targetingPlayer == null) {
+                    // nobody to choose the targets, so they cannot be chosen
+                    return false;
+                }
                 // don't set targeting player when forceful target,
                 // "targeting player controls" should not be reset when the spell is copied
                 currentAbility.setTargetingPlayer(targetingPlayer);
@@ -2417,14 +2404,14 @@ public abstract class SpellAbility extends CardTraitBase implements ISpellAbilit
             score++; //Assume a mana ability can generate at least 1 mana if the amount of mana can't be determined now.
         } else {
             String mana = manaPart.mana(this);
-            if (!mana.equals("Any")) {
+            if (mana.equals("Any")) {
+                score += 7;
+            } else {
                 score += mana.length();
                 if (!canProduce("C")) {
                     // Producing colorless should produce a slightly lower score
                     score += 1;
                 }
-            } else {
-                score += 7;
             }
         }
 

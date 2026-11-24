@@ -18,7 +18,11 @@
 package forge.util;
 
 import java.security.SecureRandom;
+import java.util.Map;
 import java.util.Random;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.LongAdder;
 
 /**
  * <p>
@@ -30,18 +34,52 @@ import java.util.Random;
  * @version $Id$
  */
 public class MyRandom {
-    /** Thread-local random to avoid cross-thread contamination in concurrent harness runs. */
-    private static final ThreadLocal<Random> random = ThreadLocal.withInitial(SecureRandom::new);
+    private static final ThreadLocal<AtomicLong> calls = ThreadLocal.withInitial(AtomicLong::new);
+    private static final ThreadLocal<Random> random =
+            ThreadLocal.withInitial(() -> new CountingRandom(new SecureRandom()));
 
-    /**
-     * <p>
-     * percentTrue.<br>
-     * If percent is like 30, then 30% of the time it will be true.
-     * </p>
-     *
-     * @param percent an int.
-     * @return a boolean.
-     */
+    private static final class CountingRandom extends Random {
+        private final Random delegate;
+        CountingRandom(Random delegate) { super(0); this.delegate = delegate; }
+        @Override protected int next(int bits) {
+            calls.get().incrementAndGet();
+            if (TRACE) { trace(); }
+            return delegate.nextInt() >>> (32 - bits);
+        }
+        @Override public void setSeed(long seed) {
+            if (delegate != null) delegate.setSeed(seed);
+        }
+    }
+    public static long callCount() { return calls.get().get(); }
+
+    private static final boolean TRACE = Boolean.getBoolean("forge.undo.debug");
+    private static final ThreadLocal<Map<String, LongAdder>> SITES =
+            ThreadLocal.withInitial(ConcurrentHashMap::new);
+
+    private static void trace() {
+        final StringBuilder key = new StringBuilder(Thread.currentThread().getName()).append(" <- ");
+        int shown = 0;
+        for (final StackTraceElement e : new Throwable().getStackTrace()) {
+            final String c = e.getClassName();
+            if (c.startsWith("java.") || c.startsWith("jdk.") || c.startsWith("forge.util.MyRandom")) { continue; }
+            key.append(c.substring(c.lastIndexOf('.') + 1)).append('.').append(e.getMethodName())
+                    .append(':').append(e.getLineNumber()).append(shown < 3 ? " < " : "");
+            if (++shown == 4) { break; }
+        }
+        SITES.get().computeIfAbsent(key.toString(), k -> new LongAdder()).increment();
+    }
+
+    public static String drainTrace(final int top) {
+        final StringBuilder sb = new StringBuilder();
+        final Map<String, LongAdder> sites = SITES.get();
+        sites.entrySet().stream()
+                .sorted((a, b) -> Long.compare(b.getValue().sum(), a.getValue().sum()))
+                .limit(top)
+                .forEach(e -> sb.append("\n    ").append(e.getValue().sum()).append("x ").append(e.getKey()));
+        sites.clear();
+        return sb.toString();
+    }
+
     public static boolean percentTrue(final int percent) {
         return percent > MyRandom.getRandom().nextInt(100);
     }
@@ -61,7 +99,7 @@ public class MyRandom {
      * @param rng the random
      */
     public static void setRandom(Random rng) {
-        MyRandom.random.set(rng);
+        MyRandom.random.set(rng instanceof CountingRandom ? rng : new CountingRandom(rng));
     }
 
     public static int[] splitIntoRandomGroups(final int value, final int numGroups) {
