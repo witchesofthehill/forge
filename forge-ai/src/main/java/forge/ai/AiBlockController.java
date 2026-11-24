@@ -1072,6 +1072,37 @@ public class AiBlockController {
         assignBlockersForCombat(combat, null);
     }
 
+    private void completeRequiredBlockGroups(final Combat combat) {
+        for (final Card attacker : attackers) {
+            final int assigned = combat.getBlockers(attacker).size();
+            final int minimum = CombatUtil.getMinNumBlockersForAttacker(attacker, combat.getDefenderPlayerByAttacker(attacker));
+            if (assigned == 0 || assigned >= minimum) {
+                continue;
+            }
+
+            final CardCollection helpers = new CardCollection();
+            for (final Card blocker : blockersLeft) {
+                if (!combat.getAttackersBlockedBy(blocker).isEmpty()
+                        || !CombatUtil.canBlock(attacker, blocker, combat)
+                        || CombatUtil.getBlockCost(ai.getGame(), blocker, attacker) != null) {
+                    continue;
+                }
+                combat.addBlocker(attacker, blocker);
+                helpers.add(blocker);
+                if (assigned + helpers.size() == minimum) {
+                    break;
+                }
+            }
+            if (CombatUtil.canAttackerBeBlockedWithAmount(attacker, assigned + helpers.size(), combat)) {
+                blockersLeft.removeAll(helpers);
+            } else {
+                for (final Card blocker : helpers) {
+                    combat.removeBlockAssignment(attacker, blocker);
+                }
+            }
+        }
+    }
+
     /**
      * Fallback used when the AI ran out of time mid-assignment: make sure creatures that MUST block
      * (lure effects, "blocks each combat if able", must-block-this-creature) still do, using whatever
@@ -1083,6 +1114,10 @@ public class AiBlockController {
             removeIllegalBlocks(combat);
             return;
         }
+        final boolean budgeted = ai.getGame().getRules().getAiWorkLimit() > 0;
+        if (budgeted) {
+            removeIllegalBlocks(combat);
+        }
         // makeRequiredBlocks/makeChumpBlocks iterate attackersLeft, which assignBlockersForCombat has not (fully) set up
         attackersLeft = new ArrayList<>(attackers);
         final CardCollectionView alreadyBlocking = combat.getAllBlockers();
@@ -1093,6 +1128,9 @@ public class AiBlockController {
             }
         }
         makeRequiredBlocks(combat);
+        if (budgeted) {
+            completeRequiredBlockGroups(combat);
+        }
 
         // Out of time while still facing lethal damage: at least chump the unblocked attackers greedily.
         // Cheap, and deliberately runs outside the AI deadline (the caller disarmed it).
