@@ -34,23 +34,42 @@ import java.util.concurrent.atomic.LongAdder;
  * @version $Id$
  */
 public class MyRandom {
-    private static final ThreadLocal<AtomicLong> calls = ThreadLocal.withInitial(AtomicLong::new);
-    private static final ThreadLocal<Random> random =
-            ThreadLocal.withInitial(() -> new CountingRandom(new SecureRandom()));
-
+    /**
+     * Every Random method (nextInt, nextBoolean, shuffle, ...) funnels through next(bits).
+     * The draw counter lives on the stream, so a game's undo detection only sees its own draws.
+     */
     private static final class CountingRandom extends Random {
         private final Random delegate;
+        private final AtomicLong calls = new AtomicLong();
         CountingRandom(Random delegate) { super(0); this.delegate = delegate; }
         @Override protected int next(int bits) {
-            calls.get().incrementAndGet();
+            calls.incrementAndGet();
             if (TRACE) { trace(); }
             return delegate.nextInt() >>> (32 - bits);
         }
         @Override public void setSeed(long seed) {
             if (delegate != null) delegate.setSeed(seed);
         }
+        long callCount() { return calls.get(); }
     }
-    public static long callCount() { return calls.get().get(); }
+
+    /**
+     * Per-thread random source. Thread-local so concurrent games in one JVM
+     * (headless simulation workers, parallel AI harnesses) that seed their
+     * stream via {@link #setRandom(Random)} cannot contaminate each other's
+     * sequences. Inheritable so threads spawned from a seeded thread (AI
+     * evaluation helpers) continue the parent's stream instead of silently
+     * falling back to an unseeded one. Single-threaded behavior is unchanged.
+     */
+    private static final ThreadLocal<CountingRandom> random = new InheritableThreadLocal<CountingRandom>() {
+        @Override
+        protected CountingRandom initialValue() {
+            return new CountingRandom(new SecureRandom());
+        }
+    };
+
+    /** Number of random draws made so far on the current thread's stream. Used by undo to detect that randomness was consumed. */
+    public static long callCount() { return random.get().callCount(); }
 
     private static final boolean TRACE = Boolean.getBoolean("forge.undo.debug");
     private static final ThreadLocal<Map<String, LongAdder>> SITES =
@@ -87,19 +106,19 @@ public class MyRandom {
     /**
      * Gets the random.
      *
-     * @return the random
+     * @return the random for the current thread
      */
     public static Random getRandom() {
-        return MyRandom.random.get();
+        return random.get();
     }
 
     /**
-     * Sets the random provider. Used for deterministic simulation.
-     * Thread-local: only affects the calling thread.
-     * @param rng the random
+     * Sets the random provider for the current thread (and threads it spawns
+     * afterwards). Used for deterministic simulation.
+     * @param random the random
      */
-    public static void setRandom(Random rng) {
-        MyRandom.random.set(rng instanceof CountingRandom ? rng : new CountingRandom(rng));
+    public static void setRandom(Random random) {
+        MyRandom.random.set(random instanceof CountingRandom ? (CountingRandom) random : new CountingRandom(random));
     }
 
     public static int[] splitIntoRandomGroups(final int value, final int numGroups) {
