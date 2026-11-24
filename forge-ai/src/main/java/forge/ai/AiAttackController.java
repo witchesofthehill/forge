@@ -200,7 +200,8 @@ public class AiAttackController {
             return Iterables.getFirst(opponents, null);
         }
 
-        Map<Player, Integer> threatScores = Maps.newHashMap();
+        Map<Player, Integer> threatScores = ai.getGame().getRules().getAiWorkLimit() > 0
+                ? new LinkedHashMap<>() : Maps.newHashMap();
         for (Player opp : opponents) {
             final int life = opp.getLife();
             int score = ComputerUtil.evaluateBoardPosition(ai, opp);
@@ -813,10 +814,11 @@ public class AiAttackController {
      */
     public final int declareAttackers(final Combat combat) {
         // TODO plan the attack with teammates, so lethal that needs both players' creatures is found (CR 805.10b)
+        final boolean budgeted = ai.getGame().getRules().getAiWorkLimit() > 0;
         final long id = AITimeoutTracker.key(ai.getGame().getId(), ai.getId());
         final long timeoutNanos = TimeUnit.SECONDS.toNanos(ai.getGame().getAITimeout());
         // predicting a HUMAN player's attack must not light up that player's timer bar
-        final boolean trackTimer = ai.getController().isAI();
+        final boolean trackTimer = !budgeted && ai.getController().isAI();
         if (trackTimer) {
             AITimeoutTracker.begin(id, timeoutNanos);
         }
@@ -896,13 +898,13 @@ public class AiAttackController {
             // nextTurn is now only used by effect from Oracle en-Vec, which can skip check must attack,
             // because creatures not chosen can't attack.
             if (!nextTurn) {
-                List<Callable<Integer>> tasks = new ArrayList<>();
-                final long deadline = AITimeoutTracker.deadlineNanos(id, timeoutNanos);
-                final AtomicBoolean combatClosed = new AtomicBoolean(false);
+                List<Callable<Integer>> tasks = budgeted ? List.of() : new ArrayList<>();
+                final long deadline = budgeted ? 0 : AITimeoutTracker.deadlineNanos(id, timeoutNanos);
+                final AtomicBoolean combatClosed = budgeted ? null : new AtomicBoolean(false);
 
                 for (final Card attacker : this.attackers) {
                     final GameEntity finalDefender = defender;
-                    tasks.add(withDeadline(deadline, () -> {
+                    final Runnable task = () -> {
                         GameEntity mustAttackDef = null;
                         if (attacker.getSVar("MustAttack").equals("True")) {
                             mustAttackDef = finalDefender;
@@ -913,7 +915,7 @@ public class AiAttackController {
                             //TODO: if there are other ways to tap this creature (like mana creature), then don't need to attack
                             mustAttackDef = finalDefender;
                         } else {
-                            if (combat.getAttackConstraints().getRequirements().get(attacker) == null) return 0;
+                            if (combat.getAttackConstraints().getRequirements().get(attacker) == null) return;
                             // check defenders in order of maximum requirements
                             List<Pair<GameEntity, Integer>> reqs = combat.getAttackConstraints().getRequirements().get(attacker).getSortedRequirements();
                             final GameEntity def = finalDefender;
@@ -941,6 +943,9 @@ public class AiAttackController {
                                 return r2.getValue() - r1.getValue();
                             });
                             for (Pair<GameEntity, Integer> e : reqs) {
+                                if (budgeted) {
+                                    AITimeoutTracker.checkWork();
+                                }
                                 if (e.getRight() == 0) continue;
                                 GameEntity mustAttackDefMaybe = e.getLeft();
                                 if (canAttackWrapper(attacker, mustAttackDefMaybe) && CombatUtil.getAttackCost(ai.getGame(), attacker, mustAttackDefMaybe) == null) {
@@ -950,23 +955,30 @@ public class AiAttackController {
                             }
                         }
                         if (mustAttackDef != null) {
-                            // combat is shared across these parallel futures and its attacker
-                            // multimap is not thread-safe; unsynchronized addAttacker calls
-                            // collide (ConcurrentModificationException, dropped attackers)
-                            synchronized (combat) {
-                                if (combatClosed.get()) {
-                                    return 0; // timed out: the caller already moved on, never touch combat after that
-                                }
+                            if (budgeted) {
                                 combat.addAttacker(attacker, mustAttackDef);
                                 attackersLeft.remove(attacker);
                                 numForcedAttackers.incrementAndGet();
+                            } else {
+                                synchronized (combat) {
+                                    if (!combatClosed.get()) {
+                                        combat.addAttacker(attacker, mustAttackDef);
+                                        attackersLeft.remove(attacker);
+                                        numForcedAttackers.incrementAndGet();
+                                    }
+                                }
                             }
                         }
-                        return 0;
-                    }));
+                    };
+                    if (budgeted) {
+                        AITimeoutTracker.checkWork();
+                        task.run();
+                    } else {
+                        tasks.add(withDeadline(deadline, task));
+                    }
                 }
 
-                if (ThreadUtil.isSynchronous()) {
+                if (!budgeted && ThreadUtil.isSynchronous()) {
                     for (Callable<Integer> task : tasks) {
                         try {
                             task.call();
@@ -974,7 +986,7 @@ public class AiAttackController {
                             e.printStackTrace();
                         }
                     }
-                } else {
+                } else if (!budgeted) {
                     ExecutorService executor = Executors.newFixedThreadPool(
                         Runtime.getRuntime().availableProcessors(), r -> {
                             Thread t = Executors.defaultThreadFactory().newThread(r);
@@ -1395,16 +1407,17 @@ public class AiAttackController {
     }
 
     /** Runs a worker task armed with the AI deadline (and interrupt), so pool threads stop instead of running on as zombies. */
-    private static Callable<Integer> withDeadline(final long deadlineNanos, final Callable<Integer> task) {
+    private static Callable<Integer> withDeadline(final long deadlineNanos, final Runnable task) {
         return () -> {
             final Object limit = AITimeoutTracker.arm(deadlineNanos, true);
             try {
-                return task.call();
+                task.run();
             } catch (AITimeoutTracker.Expired e) {
                 return 0;
             } finally {
                 AITimeoutTracker.disarm(limit); // pooled threads must not inherit the limit
             }
+            return 0;
         };
     }
 

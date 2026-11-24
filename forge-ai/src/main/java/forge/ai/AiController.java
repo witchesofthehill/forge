@@ -108,6 +108,9 @@ public class AiController {
     private volatile long combatDeadline = Long.MAX_VALUE;
 
     public boolean evalDeadlinePassed() {
+        if (usesWorkBudget()) {
+            return AITimeoutTracker.workExhausted();
+        }
         final boolean passed = System.currentTimeMillis() > Math.min(evalDeadline, combatDeadline);
         if (passed && TRACE_DEADLINE && !tracedPass) {
             tracedPass = true;
@@ -122,6 +125,10 @@ public class AiController {
     private boolean tracedPass;
 
     public static boolean evalDeadlinePassed(final Player p) {
+        if (p.getGame().getRules().getAiWorkLimit() > 0) {
+            AITimeoutTracker.checkWork();
+            return false;
+        }
         return p.getController().isAI() && ((PlayerControllerAi) p.getController()).getAi().evalDeadlinePassed();
     }
 
@@ -203,6 +210,10 @@ public class AiController {
         simPicker = new SpellAbilityPicker(player);
     }
 
+    private boolean usesWorkBudget() {
+        return game.getRules().getAiWorkLimit() > 0;
+    }
+
     public boolean usesHybridSimulation() {
         return simMode == AIOption.USE_HYBRID_SIMULATION;
     }
@@ -214,7 +225,7 @@ public class AiController {
         return simMode == AIOption.USE_FULL_SIMULATION;
     }
     public void setUseSimulation(AIOption mode) {
-        simMode = mode;
+        simMode = usesWorkBudget() ? null : mode;
     }
 
     public int getAttackAggression() {
@@ -1526,6 +1537,22 @@ public class AiController {
 
     // declares blockers for given defender in a given combat
     public void declareBlockersFor(Player defender, Combat combat) {
+        if (usesWorkBudget()) {
+            final AiBlockController block = new AiBlockController(defender, defender != player);
+            final boolean owner = AITimeoutTracker.beginWork(game.getRules().getAiWorkLimit());
+            try {
+                block.assignBlockersForCombat(combat);
+                return;
+            } catch (AITimeoutTracker.Expired e) {
+                if (!owner) {
+                    throw e;
+                }
+            } finally {
+                AITimeoutTracker.endWork(owner);
+            }
+            block.completeRequiredBlocks(combat);
+            return;
+        }
         final long outerCombatDeadline = combatDeadline;
         combatDeadline = Math.min(outerCombatDeadline, System.currentTimeMillis() + game.getAITimeout() * 1000L);
         final long id = AITimeoutTracker.key(game.getId(), player.getId());
@@ -1616,29 +1643,44 @@ public class AiController {
             declareOverriddenAttackers(combat);
             return;
         }
+        final boolean budgeted = usesWorkBudget();
         // 12/2/10(sol) the decision making here has moved to getAttackers()
         final long outerCombatDeadline = combatDeadline;
-        combatDeadline = Math.min(outerCombatDeadline, System.currentTimeMillis() + game.getAITimeout() * 1000L);
+        if (!budgeted) {
+            combatDeadline = Math.min(outerCombatDeadline, System.currentTimeMillis() + game.getAITimeout() * 1000L);
+        }
         final long id = AITimeoutTracker.key(game.getId(), player.getId());
         final long timeoutNanos = TimeUnit.SECONDS.toNanos(game.getAITimeout());
-        AITimeoutTracker.begin(id, timeoutNanos);
+        final boolean owner = budgeted && AITimeoutTracker.beginWork(game.getRules().getAiWorkLimit());
+        if (!budgeted) {
+            AITimeoutTracker.begin(id, timeoutNanos);
+        }
         AiAttackController aiAtk = null;
         Object limit = null;
         try {
             aiAtk = new AiAttackController(attacker);
-            limit = AITimeoutTracker.arm(AITimeoutTracker.deadlineNanos(id, timeoutNanos), false);
+            if (!budgeted) {
+                limit = AITimeoutTracker.arm(AITimeoutTracker.deadlineNanos(id, timeoutNanos), false);
+            }
             lastAttackAggression = aiAtk.declareAttackers(combat);
 
             aiAtk.reinforceWithBanding(combat);
             refineAttackWithFlatMonteCarlo(attacker, combat);
         } catch (AITimeoutTracker.Expired e) {
+            if (budgeted && !owner) {
+                throw e;
+            }
             // out of time: attack with what was decided so far; the validity check below repairs an illegal declaration
         } finally {
             if (limit != null) {
                 AITimeoutTracker.disarm(limit);
             }
-            AITimeoutTracker.end(id);
-            combatDeadline = outerCombatDeadline;
+            if (budgeted) {
+                AITimeoutTracker.endWork(owner);
+            } else {
+                AITimeoutTracker.end(id);
+                combatDeadline = outerCombatDeadline;
+            }
         }
 
         // Per CR 508.1d, the decision to pay attack costs (e.g. Propaganda)
@@ -1654,12 +1696,15 @@ public class AiController {
             }
             final Map<Card, GameEntity> legal = combat.getAttackConstraints().getLegalAttackers().getLeft();
             System.err.println("AI Attack declaration invalid, defaulting to: " + legal);
-            for (final Map.Entry<Card, GameEntity> mandatoryAttacker : legal.entrySet()) {
+            final Iterable<Map.Entry<Card, GameEntity>> ordered = budgeted
+                    ? legal.entrySet().stream().sorted(Map.Entry.comparingByKey(Comparator.comparingInt(Card::getId))).toList()
+                    : legal.entrySet();
+            for (final Map.Entry<Card, GameEntity> mandatoryAttacker : ordered) {
                 if (mandatoryAttacker.getKey().getController().equals(attacker)) {
                     combat.addAttacker(mandatoryAttacker.getKey(), mandatoryAttacker.getValue());
                 }
             }
-            if (aiAtk != null && !CombatUtil.validateAttackers(combat)) {
+            if (!budgeted && aiAtk != null && !CombatUtil.validateAttackers(combat)) {
                 aiAtk.declareAttackers(combat);
             }
         }
@@ -1694,6 +1739,19 @@ public class AiController {
      * (= the AI passes priority) the moment the timer runs out.
      */
     public List<SpellAbility> chooseSpellAbilityToPlay() {
+        if (usesWorkBudget()) {
+            final boolean owner = AITimeoutTracker.beginWork(game.getRules().getAiWorkLimit());
+            try {
+                return chooseSpellAbilityToPlayImpl();
+            } catch (AITimeoutTracker.Expired e) {
+                if (!owner) {
+                    throw e;
+                }
+                return null;
+            } finally {
+                AITimeoutTracker.endWork(owner);
+            }
+        }
         final long id = AITimeoutTracker.key(game.getId(), player.getId());
         final long timeoutNanos = TimeUnit.SECONDS.toNanos(game.getAITimeout());
         AITimeoutTracker.begin(id, timeoutNanos);
@@ -2616,7 +2674,7 @@ public class AiController {
 
     /** Monte Carlo is off for this player: tripped by errors, or paused after slowness. */
     private boolean flatMcOff() {
-        return flatMcTripped || game.getPhaseHandler().getTurn() < flatMcPausedUntilTurn;
+        return usesWorkBudget() || flatMcTripped || game.getPhaseHandler().getTurn() < flatMcPausedUntilTurn;
     }
 
     private DeckPlan flatMcDeckPlan;
@@ -2868,6 +2926,9 @@ public class AiController {
         final ComboPlan combos = deckPlan(player).combos;
         final boolean massReanimation = combos.isMassReanimationDeck(player);
         final boolean darkDepths = combos.has(ComboPlan.Kind.DARK_DEPTHS);
+        if (usesWorkBudget()) {
+            return evaluateSpellAbilities(all, skipCounter, maxResults, extrasOut, combos, massReanimation, darkDepths, true);
+        }
         final long aiId = AITimeoutTracker.key(game.getId(), player.getId());
         final long timeoutNanos = TimeUnit.SECONDS.toNanos(game.getAITimeout());
         AITimeoutTracker.begin(aiId, timeoutNanos);
@@ -2877,112 +2938,11 @@ public class AiController {
         evalDeadline = Math.min(outerEvalDeadline, System.currentTimeMillis() + game.getAITimeout() * 1000L);
         final long evalStartedAt = System.currentTimeMillis();
         FutureTask<List<SpellAbility>> future = new FutureTask<>(() -> {
-            final List<SpellAbility> approvedPlays = new ArrayList<>();
-            // the eval thread aborts itself at the shared deadline (or when cancelled) instead of running on as a zombie
             final Object evalLimit = AITimeoutTracker.arm(deadlineNanos, true);
             try {
-                //avoid ComputerUtil.aiLifeInDanger in loops as it slows down a lot.. call this outside loops will generally be fast...
-                final boolean isLifeInDanger = massReanimation && ComputerUtil.aiLifeInDanger(player, true, 0);
-                for (final SpellAbility sa : ComputerUtilAbility.getOriginalAndAltCostAbilities(all, player)) {
-                    AITimeoutTracker.check();
-                    if (timeoutReached || Thread.currentThread().isInterrupted() || System.currentTimeMillis() > evalDeadline) {
-                        timeoutReached = false;
-                        break;
-                    }
-
-                    // Don't add Counterspells to the "normal" playcard lookups
-                    if (skipCounter && sa.getApi() == ApiType.Counter) {
-                        continue;
-                    }
-
-                    if (sa.getHostCard().hasKeyword(Keyword.STORM)
-                            && sa.getApi() != ApiType.Counter // AI would suck at trying to deliberately proc a Storm counterspell
-                            && player.getZone(ZoneType.Hand).contains(
-                                    Predicate.not(CardPredicates.LANDS.or(CardPredicates.hasKeyword("Storm")))
-                        )) {
-                        // a storm card that takes the last life of the opponent is always worth casting; a deck built around
-                        // finding it with tutors keeps it until then, any other deck casts it from the minimum storm count on
-                        if (!ComboPlan.stormIsLethal(player, sa.getHostCard())
-                                && ((combos.has(ComboPlan.Kind.TUTOR_STORM) && ComboPlan.takesLifePerCopy(sa.getHostCard()))
-                                || game.getView().getStormCount() < this.getIntProperty(AiProps.MIN_COUNT_FOR_STORM_SPELLS))) {
-                            // skip evaluating Storm unless we reached the minimum Storm count
-                            continue;
-                        }
-                    }
-
-                    // a tutor storm deck keeps its rituals and moxen for the turn the solver finds the kill
-                    if (combos.holdsForKill(sa) || combos.wastesTutor(sa) || combos.wastesFodder(sa)) {
-                        continue;
-                    }
-                    // a take-life storm finisher is never cast unless it kills, even when it is the only spell left in hand
-                    if (combos.has(ComboPlan.Kind.TUTOR_STORM) && sa.isSpell() && sa.getHostCard() != null
-                            && ComboPlan.isStormFinisher(sa.getHostCard())
-                            && ComboPlan.takesLifePerCopy(sa.getHostCard())
-                            && !ComboPlan.stormIsLethal(player, sa.getHostCard())) {
-                        continue;
-                    }
-
-                    sa.setActivatingPlayer(player);
-                    SpellAbility root = sa.getRootAbility();
-
-                    // a Living End style deck plays its cycling, fuel and cascade by its own rules, see ComboPlan
-                    ComboPlan.Ruling ruling = ComboPlan.Ruling.NO_OPINION;
-                    if (massReanimation) {
-                        ruling = combos.massReanimationRuling(player, sa, isLifeInDanger);
-                        if (ruling == ComboPlan.Ruling.SKIP) {
-                            continue;
-                        }
-                    }
-                    if (darkDepths && ruling == ComboPlan.Ruling.NO_OPINION) {
-                        ruling = combos.darkDepthsRuling(player, sa);
-                        if (ruling == ComboPlan.Ruling.SKIP) {
-                            continue;
-                        }
-                    }
-
-                    if (root.isSpell() || root.isTrigger() || root.isReplacementAbility()) {
-                        sa.setLastStateBattlefield(game.getLastStateBattlefield());
-                        sa.setLastStateGraveyard(game.getLastStateGraveyard());
-                    }
-                    final AiPlayDecision opinion;
-                    try {
-                        opinion = ruling == ComboPlan.Ruling.PLAY ? AiPlayDecision.WillPlay : canPlayAndPayFor(sa);
-                    } finally {
-                        // reset LastStateBattlefield - also when the deadline fired inside canPlayAndPayFor
-                        sa.clearLastState();
-                    }
-                    // PhaseHandler ph = game.getPhaseHandler();
-                    // System.out.printf("Ai thinks '%s' of %s -> %s @ %s %s >>> \n", opinion, sa.getHostCard(), sa, Lang.getInstance().getPossesive(ph.getPlayerTurn().getName()), ph.getPhase());
-
-                    if (isFlatMcOnlyPlay(sa)) {
-                        // never approved by the heuristics: only a play for the rollouts to weigh, and only with discovery
-                        if (extrasOut != null && isLegalDiscovery(sa, opinion)) {
-                            extrasOut.add(sa);
-                        }
-                        continue;
-                    }
-                    if (opinion != AiPlayDecision.WillPlay) {
-                        if (maxResults > 1) {
-                            FlatMonteCarloStats.noteRejected(opinion.name());
-                        }
-                        if (extrasOut != null && isLegalDiscovery(sa, opinion)) {
-                            extrasOut.add(sa);
-                        }
-                        continue;
-                    }
-
-                    // TODO could continue to try find another with higher rating (weighted by priority ordering)
-                    approvedPlays.add(sa);
-                    if (approvedPlays.size() >= maxResults) {
-                        break;
-                    }
-                }
-
-                return approvedPlays;
-            } catch (AITimeoutTracker.Expired e) {
-                return approvedPlays; // whatever was approved before time ran out
+                return evaluateSpellAbilities(all, skipCounter, maxResults, extrasOut, combos, massReanimation, darkDepths, false);
             } finally {
-                AITimeoutTracker.disarm(evalLimit); // matters as soon as this runs on a pooled thread
+                AITimeoutTracker.disarm(evalLimit);
             }
         });
 
@@ -3047,6 +3007,108 @@ public class AiController {
         } finally {
             evalDeadline = outerEvalDeadline;
             AITimeoutTracker.end(aiId);
+        }
+    }
+
+    private List<SpellAbility> evaluateSpellAbilities(final List<SpellAbility> all, final boolean skipCounter,
+            final int maxResults, final List<SpellAbility> extrasOut, final ComboPlan combos,
+            final boolean massReanimation, final boolean darkDepths, final boolean budgeted) {
+        final List<SpellAbility> approvedPlays = new ArrayList<>();
+        try {
+            final boolean isLifeInDanger = massReanimation && ComputerUtil.aiLifeInDanger(player, true, 0);
+            for (final SpellAbility sa : ComputerUtilAbility.getOriginalAndAltCostAbilities(all, player)) {
+                AITimeoutTracker.check();
+                if (!budgeted && (timeoutReached || Thread.currentThread().isInterrupted() || System.currentTimeMillis() > evalDeadline)) {
+                    timeoutReached = false;
+                    break;
+                }
+
+                // Don't add Counterspells to the "normal" playcard lookups
+                if (skipCounter && sa.getApi() == ApiType.Counter) {
+                    continue;
+                }
+
+                if (sa.getHostCard().hasKeyword(Keyword.STORM)
+                        && sa.getApi() != ApiType.Counter // AI would suck at trying to deliberately proc a Storm counterspell
+                        && player.getZone(ZoneType.Hand).contains(
+                                Predicate.not(CardPredicates.LANDS.or(CardPredicates.hasKeyword("Storm")))
+                        )) {
+                    // a storm card that takes the last life of the opponent is always worth casting; a deck built around
+                    // finding it with tutors keeps it until then, any other deck casts it from the minimum storm count on
+                    if (!ComboPlan.stormIsLethal(player, sa.getHostCard())
+                            && ((combos.has(ComboPlan.Kind.TUTOR_STORM) && ComboPlan.takesLifePerCopy(sa.getHostCard()))
+                            || game.getView().getStormCount() < this.getIntProperty(AiProps.MIN_COUNT_FOR_STORM_SPELLS))) {
+                        // skip evaluating Storm unless we reached the minimum Storm count
+                        continue;
+                    }
+                }
+
+                // a tutor storm deck keeps its rituals and moxen for the turn the solver finds the kill
+                if (combos.holdsForKill(sa) || combos.wastesTutor(sa) || combos.wastesFodder(sa)) {
+                    continue;
+                }
+                // a take-life storm finisher is never cast unless it kills, even when it is the only spell left in hand
+                if (combos.has(ComboPlan.Kind.TUTOR_STORM) && sa.isSpell() && sa.getHostCard() != null
+                        && ComboPlan.isStormFinisher(sa.getHostCard())
+                        && ComboPlan.takesLifePerCopy(sa.getHostCard())
+                        && !ComboPlan.stormIsLethal(player, sa.getHostCard())) {
+                    continue;
+                }
+
+                sa.setActivatingPlayer(player);
+                SpellAbility root = sa.getRootAbility();
+
+                // a Living End style deck plays its cycling, fuel and cascade by its own rules, see ComboPlan
+                ComboPlan.Ruling ruling = ComboPlan.Ruling.NO_OPINION;
+                if (massReanimation) {
+                    ruling = combos.massReanimationRuling(player, sa, isLifeInDanger);
+                    if (ruling == ComboPlan.Ruling.SKIP) {
+                        continue;
+                    }
+                }
+                if (darkDepths && ruling == ComboPlan.Ruling.NO_OPINION) {
+                    ruling = combos.darkDepthsRuling(player, sa);
+                    if (ruling == ComboPlan.Ruling.SKIP) {
+                        continue;
+                    }
+                }
+
+                if (root.isSpell() || root.isTrigger() || root.isReplacementAbility()) {
+                    sa.setLastStateBattlefield(game.getLastStateBattlefield());
+                    sa.setLastStateGraveyard(game.getLastStateGraveyard());
+                }
+                final AiPlayDecision opinion;
+                try {
+                    opinion = ruling == ComboPlan.Ruling.PLAY ? AiPlayDecision.WillPlay : canPlayAndPayFor(sa);
+                } finally {
+                    sa.clearLastState();
+                }
+
+                if (isFlatMcOnlyPlay(sa)) {
+                    // never approved by the heuristics: only a play for the rollouts to weigh, and only with discovery
+                    if (extrasOut != null && isLegalDiscovery(sa, opinion)) {
+                        extrasOut.add(sa);
+                    }
+                    continue;
+                }
+                if (opinion != AiPlayDecision.WillPlay) {
+                    if (maxResults > 1) {
+                        FlatMonteCarloStats.noteRejected(opinion.name());
+                    }
+                    if (extrasOut != null && isLegalDiscovery(sa, opinion)) {
+                        extrasOut.add(sa);
+                    }
+                    continue;
+                }
+
+                approvedPlays.add(sa);
+                if (approvedPlays.size() >= maxResults) {
+                    break;
+                }
+            }
+            return approvedPlays;
+        } catch (AITimeoutTracker.Expired e) {
+            return approvedPlays;
         }
     }
 

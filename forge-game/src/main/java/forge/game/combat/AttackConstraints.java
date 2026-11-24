@@ -34,6 +34,7 @@ public class AttackConstraints {
     private final FCollectionView<GameEntity> possibleDefenders;
     private final GlobalAttackRestrictions globalRestrictions;
 
+    private final boolean deterministic;
     private final Map<Card, AttackRestriction> restrictions = Maps.newHashMap();
     private final Map<Card, AttackRequirement> requirements = Maps.newHashMap();
     /** Per attacking player, the defenders a static ability makes them attack with at least one of their creatures. */
@@ -41,6 +42,7 @@ public class AttackConstraints {
 
     public AttackConstraints(final Combat combat) {
         final Player attacking = combat.getAttackingPlayer();
+        deterministic = attacking.getGame().getRules().getAiWorkLimit() > 0;
         // CR 805.10b: under shared team turns the team declares one combined attack, and each attacking player keeps their own requirements
         final PlayerCollection attackingPlayers = attacking.getSharedTeam();
         possibleAttackers = attackingPlayers.getCreaturesInPlay();
@@ -326,14 +328,25 @@ public class AttackConstraints {
             }
         }
 
-        result.sort(Comparator.reverseOrder());
+        Comparator<Attack> order = Comparator.reverseOrder();
+        if (deterministic) {
+            order = order.thenComparingInt(a -> a.attacker.getId()).thenComparingInt(a -> a.defender.getId());
+        }
+        result.sort(order);
 
         CardCollection usedAttackers = new CardCollection();
-        for (final Entry<Player, Multimap<GameEntity, StaticAbility>> requirementsOf : playerRequirements.entrySet()) {
+        final Iterable<Entry<Player, Multimap<GameEntity, StaticAbility>>> orderedPlayers = deterministic
+                ? playerRequirements.entrySet().stream().sorted(Entry.comparingByKey(Comparator.comparingInt(Player::getId))).toList()
+                : playerRequirements.entrySet();
+        Comparator<Entry<GameEntity, Collection<StaticAbility>>> defenderOrder = Comparator.comparingInt(e -> e.getValue().size());
+        if (deterministic) {
+            defenderOrder = defenderOrder.thenComparing(Entry::getKey, Comparator.comparingInt(GameEntity::getId).reversed());
+        }
+        for (final Entry<Player, Multimap<GameEntity, StaticAbility>> requirementsOf : orderedPlayers) {
             Multimap<GameEntity, StaticAbility> playerReqs = MultimapBuilder.hashKeys().arrayListValues().build(requirementsOf.getValue());
             while (!playerReqs.isEmpty()) {
                 Map.Entry<GameEntity, Collection<StaticAbility>> playerReq = playerReqs.asMap().entrySet().stream()
-                        .max(Comparator.comparing(e -> e.getValue().size())).orElse(null);
+                        .max(defenderOrder).orElse(null);
                 // find best attack to also fulfill the additional requirements, one with a cost would be skipped later
                 Attack bestMatch = result.stream().filter(att -> !usedAttackers.contains(att.attacker) && att.defender.equals(playerReq.getKey())
                         && att.attacker.getController().equals(requirementsOf.getKey())
@@ -350,7 +363,7 @@ public class AttackConstraints {
         }
         if (!usedAttackers.isEmpty()) {
             // order could have changed
-            result.sort(Comparator.reverseOrder());
+            result.sort(order);
         }
 
         return result;
