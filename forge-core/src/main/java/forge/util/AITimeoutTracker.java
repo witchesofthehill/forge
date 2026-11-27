@@ -171,16 +171,49 @@ public final class AITimeoutTracker {
     /** Thrown by {@link #check()} when the thread's AI deadline has passed. Carries no stack trace (cheap). */
     public static final class Expired extends RuntimeException {
         private static final long serialVersionUID = 1L;
-        Expired() { super("AI deadline reached", null, false, false); }
+        Expired() { super("AI budget exhausted", null, false, false); }
     }
 
     private static final class Limit {
         boolean armed;
         boolean honourInterrupt;
         long deadlineNanos;
+        int remainingWork = -1;
     }
 
     private static final ThreadLocal<Limit> LIMIT = ThreadLocal.withInitial(Limit::new);
+
+    public static boolean beginWork(final int units) {
+        final Limit limit = LIMIT.get();
+        if (limit.remainingWork >= 0) {
+            return false;
+        }
+        limit.remainingWork = units;
+        return true;
+    }
+
+    public static void endWork(final boolean owner) {
+        if (owner) {
+            LIMIT.get().remainingWork = -1;
+        }
+    }
+
+    public static boolean workExhausted() {
+        return LIMIT.get().remainingWork == 0;
+    }
+
+    public static void checkWork() {
+        spendWork(LIMIT.get());
+    }
+
+    private static void spendWork(final Limit limit) {
+        if (limit.remainingWork == 0) {
+            throw new Expired();
+        }
+        if (limit.remainingWork > 0) {
+            limit.remainingWork--;
+        }
+    }
 
     /**
      * Arms this thread with an absolute System.nanoTime() deadline; returns a token for {@link #disarm}.
@@ -210,6 +243,10 @@ public final class AITimeoutTracker {
     /** Cheap: call it inside AI loops. Throws {@link Expired} once the armed deadline passed (no-op when not armed). */
     public static void check() {
         final Limit l = LIMIT.get();
+        if (l.remainingWork >= 0) {
+            spendWork(l);
+            return;
+        }
         if (l.armed && (System.nanoTime() - l.deadlineNanos >= 0 || (l.honourInterrupt && Thread.currentThread().isInterrupted()))) {
             throw new Expired();
         }

@@ -37,6 +37,7 @@ import forge.game.combat.CombatUtil;
 import forge.game.cost.Cost;
 import forge.game.keyword.Keyword;
 import forge.game.player.Player;
+import forge.game.player.PlayerCollection;
 import forge.game.spellability.SpellAbility;
 import forge.game.staticability.StaticAbilityAssignCombatDamageAsUnblocked;
 import forge.game.staticability.StaticAbilityCantAttackBlock;
@@ -1072,6 +1073,44 @@ public class AiBlockController {
         assignBlockersForCombat(combat, null);
     }
 
+    private void completeRequiredBlockGroups(final Combat combat) {
+        for (final Card attacker : attackers) {
+            final int assigned = combat.getBlockers(attacker).size();
+            final int minimum = CombatUtil.getMinNumBlockersForAttacker(attacker, combat.getDefenderPlayerByAttacker(attacker));
+            if (assigned == 0 || assigned >= minimum) {
+                continue;
+            }
+
+            final CardCollection teamBlockers = CardLists.filterControlledBy(combat.getAllBlockers(), ai.getSharedTeam());
+            final int blockerCount = teamBlockers.size() + minimum - assigned;
+            final List<Card> candidates = new ArrayList<>(blockersLeft);
+            candidates.sort(Comparator.comparingInt(Card::getNetPower).reversed());
+            final CardCollection helpers = new CardCollection();
+            for (final Card blocker : candidates) {
+                if (!combat.getAttackersBlockedBy(blocker).isEmpty()
+                        || !CombatUtil.canBlock(attacker, blocker, combat)
+                        || CombatUtil.getBlockCost(ai.getGame(), blocker, attacker) != null
+                        || CombatUtil.getBlockerRestriction(blocker, teamBlockers, blockerCount) != null) {
+                    continue;
+                }
+                combat.addBlocker(attacker, blocker);
+                helpers.add(blocker);
+                teamBlockers.add(blocker);
+                if (assigned + helpers.size() == minimum) {
+                    break;
+                }
+            }
+            if (CombatUtil.canAttackerBeBlockedWithAmount(attacker, assigned + helpers.size(), combat)
+                    && teamBlockers.stream().allMatch(b -> CombatUtil.getBlockerRestriction(b, teamBlockers, blockerCount) == null)) {
+                blockersLeft.removeAll(helpers);
+            } else {
+                for (final Card blocker : helpers) {
+                    combat.removeBlockAssignment(attacker, blocker);
+                }
+            }
+        }
+    }
+
     /**
      * Fallback used when the AI ran out of time mid-assignment: make sure creatures that MUST block
      * (lure effects, "blocks each combat if able", must-block-this-creature) still do, using whatever
@@ -1083,6 +1122,10 @@ public class AiBlockController {
             removeIllegalBlocks(combat);
             return;
         }
+        final boolean budgeted = ai.getGame().getRules().getAiWorkLimit() > 0;
+        if (budgeted) {
+            removeIllegalBlocks(combat);
+        }
         // makeRequiredBlocks/makeChumpBlocks iterate attackersLeft, which assignBlockersForCombat has not (fully) set up
         attackersLeft = new ArrayList<>(attackers);
         final CardCollectionView alreadyBlocking = combat.getAllBlockers();
@@ -1093,6 +1136,9 @@ public class AiBlockController {
             }
         }
         makeRequiredBlocks(combat);
+        if (budgeted) {
+            completeRequiredBlockGroups(combat);
+        }
 
         // Out of time while still facing lethal damage: at least chump the unblocked attackers greedily.
         // Cheap, and deliberately runs outside the AI deadline (the caller disarmed it).
@@ -1111,11 +1157,29 @@ public class AiBlockController {
         // makeRequiredBlocks, makeChumpBlocksToSavePW and the trample attacker switch add single blockers without looking at the
         // attacker's block restrictions; master repairs that at the end of assignBlockers, but an Expired thrown earlier skips it
         // and the engine does not validate AI blocks for blocker count.
-        removeIllegalBlocks(combat);
+        if (!budgeted) {
+            removeIllegalBlocks(combat);
+            return;
+        }
+
+        final PlayerCollection team = ai.getSharedTeam();
+        boolean changed;
+        do {
+            changed = removeIllegalBlocks(combat);
+            final CardCollection teamBlockers = CardLists.filterControlledBy(combat.getAllBlockers(), team);
+            for (final Card blocker : teamBlockers) {
+                if (blocker.getController().equals(ai)
+                        && CombatUtil.getBlockerRestriction(blocker, teamBlockers, teamBlockers.size()) != null) {
+                    combat.undoBlockingAssignment(blocker);
+                    changed = true;
+                }
+            }
+        } while (changed);
     }
 
     /** Same repair as the "Check for validity of blocks" loop at the end of assignBlockers (menace, "no more than N blockers" ...). */
-    private void removeIllegalBlocks(final Combat combat) {
+    private boolean removeIllegalBlocks(final Combat combat) {
+        boolean changed = false;
         for (final Card attacker : combat.getAttackers()) {
             final List<Card> mine = CardLists.filterControlledBy(combat.getBlockers(attacker), ai);
             if (mine.isEmpty()) {
@@ -1126,8 +1190,10 @@ public class AiBlockController {
                     // don't touch other player's blockers
                     combat.removeFromCombat(blocker);
                 }
+                changed = true;
             }
         }
+        return changed;
     }
     public void assignBlockersForCombat(final Combat combat, final CardCollection excludedBlockers) {
         // TODO plan blocks together with teammates (CR 805.10d)
@@ -1475,7 +1541,7 @@ public class AiBlockController {
             evalBlk = ComputerUtilCard.evaluateCreature(blocker, true, false);
         }
         int chanceToSavePW = chanceToTradeDownToSaveWalker > 0 && evalAtk + 1 < evalBlk ? chanceToTradeDownToSaveWalker : chanceToTradeToSaveWalker;
-        boolean powerParityOrHigher = blocker.getNetPower() <= attacker.getNetPower();
+        boolean powerParityOrHigher = blocker.getNetCombatDamage() <= attacker.getNetCombatDamage();
         boolean creatureParityOrAllowedDiff = aiCreatureCount
                 + (randomTradeIfBehindOnBoard ? maxCreatDiff : 0) >= oppCreatureCount;
         boolean wantToTradeWithCreatInHand = !checkingOther && randomTradeIfCreatInHand
