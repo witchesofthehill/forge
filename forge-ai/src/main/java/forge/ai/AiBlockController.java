@@ -37,6 +37,7 @@ import forge.game.combat.CombatUtil;
 import forge.game.cost.Cost;
 import forge.game.keyword.Keyword;
 import forge.game.player.Player;
+import forge.game.player.PlayerCollection;
 import forge.game.spellability.SpellAbility;
 import forge.game.staticability.StaticAbilityAssignCombatDamageAsUnblocked;
 import forge.game.staticability.StaticAbilityCantAttackBlock;
@@ -1156,11 +1157,29 @@ public class AiBlockController {
         // makeRequiredBlocks, makeChumpBlocksToSavePW and the trample attacker switch add single blockers without looking at the
         // attacker's block restrictions; master repairs that at the end of assignBlockers, but an Expired thrown earlier skips it
         // and the engine does not validate AI blocks for blocker count.
-        removeIllegalBlocks(combat);
+        if (!budgeted) {
+            removeIllegalBlocks(combat);
+            return;
+        }
+
+        final PlayerCollection team = ai.getSharedTeam();
+        boolean changed;
+        do {
+            changed = removeIllegalBlocks(combat);
+            final CardCollection teamBlockers = CardLists.filterControlledBy(combat.getAllBlockers(), team);
+            for (final Card blocker : teamBlockers) {
+                if (blocker.getController().equals(ai)
+                        && CombatUtil.getBlockerRestriction(blocker, teamBlockers, teamBlockers.size()) != null) {
+                    combat.undoBlockingAssignment(blocker);
+                    changed = true;
+                }
+            }
+        } while (changed);
     }
 
     /** Same repair as the "Check for validity of blocks" loop at the end of assignBlockers (menace, "no more than N blockers" ...). */
-    private void removeIllegalBlocks(final Combat combat) {
+    private boolean removeIllegalBlocks(final Combat combat) {
+        boolean changed = false;
         for (final Card attacker : combat.getAttackers()) {
             final List<Card> mine = CardLists.filterControlledBy(combat.getBlockers(attacker), ai);
             if (mine.isEmpty()) {
@@ -1171,8 +1190,10 @@ public class AiBlockController {
                     // don't touch other player's blockers
                     combat.removeFromCombat(blocker);
                 }
+                changed = true;
             }
         }
+        return changed;
     }
     public void assignBlockersForCombat(final Combat combat, final CardCollection excludedBlockers) {
         // TODO plan blocks together with teammates (CR 805.10d)
